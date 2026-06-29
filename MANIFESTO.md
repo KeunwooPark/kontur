@@ -1,10 +1,10 @@
 # Kontur — Handoff
 
-**Kontur** is a visual-first programming language: a tool for drawing **maps of software**.
-Only AI authors code in it. The AI emits a structured graph IR; that IR is the source of
-truth. From it, two artifacts are derived: runnable code (multiple language backends) and an
-**audit diagram** — the map — that a human reads to understand and trust what the agent built.
-Humans never edit the graph.
+**Kontur** is a visual-first *audit layer* for AI-authored software: a tool for drawing **maps
+of software**. The AI writes code; Kontur **lifts** that code into a structured graph IR, and
+from the IR derives an **audit diagram** — the map — that a human reads to understand and trust
+what the agent built. The code is the source of truth; the IR and the diagram are derived views.
+Humans never edit the graph; they read the map.
 
 The name (from *contour* — the lines on a map that reveal hidden terrain) is the thesis: Kontur
 surfaces the structure of AI-built software the way a contour map surfaces the shape of land.
@@ -21,10 +21,15 @@ ignore it; the project is Kontur.)
 
 These were settled through design discussion. Treat them as fixed unless you have a strong reason.
 
-- **AI-authored only.** No human editing, no graph→code→graph round-trip, no live sync.
-  One direction at a time: AI emits IR → transpile to code; IR → render to diagram.
-  This deletes the hardest problem in visual languages (round-trip fidelity). Keep it deleted.
-- **Graph IR is canonical (source of truth).** The code and the diagram are both *derived*.
+- **Code-first, one direction.** The AI writes code; Kontur lifts it to IR and renders the
+  diagram. No human editing of the graph, no graph→code→graph round-trip, no live sync.
+  One direction at a time: code → lift to IR; IR → render to diagram. This *still* deletes the
+  hardest problem in visual languages (round-trip fidelity) — the pipeline never merges graph
+  edits back into code. Keep it deleted.
+- **Code is canonical (source of truth).** The IR and the diagram are both *derived* — the IR
+  by lifting, the diagram by rendering the IR. Transpile (IR → code) remains a pure function and
+  is how *other* language backends stay reachable (lift TS → transpile Python), but it is no
+  longer the authoring path.
 - **Visual is for human audit/trust**, not authoring. The AI never sees pixels. The diagram
   exists so a human can see what the agent built. Correctness + legibility of the rendering
   matter; prettiness is secondary.
@@ -34,6 +39,25 @@ These were settled through design discussion. Treat them as fixed unless you hav
 - **Hybrid control flow** (Unreal Blueprints model): two wire kinds — **data wires** (typed
   values) and **control wires** (execution order, "white exec wire"). Pure dataflow was rejected
   because it can't express conditionals/loops/early-return legibly for a general-purpose language.
+
+### Authoring model: code-first — the lift is the gate
+
+The AI authors in real code (a supported subset), not in the graph. `lift` is the gate that turns
+that code into canonical-IR-plus-diagram, and it is **load-bearing**:
+
+- **Lift rejects loudly, never lossily.** If code uses a construct the IR can't yet represent
+  (closures, early/multiple returns, etc.), `lift` fails with a clear reason. It must never
+  silently drop structure — a partial map is worse than no map.
+- **A lift failure is a rewrite signal, not a dead end.** The contract for the agent loop is:
+  *if `lift` rejects your code, rewrite it into the supported subset and try again.* What the
+  lifter accepts therefore *defines* what the AI is allowed to write — the supported subset is
+  the real authoring constraint.
+- **Lifter coverage outranks transpiler breadth.** Every program passes through the lifter, so
+  widening its coverage (while keeping the loud-reject discipline) is the highest-leverage
+  semantic work — see §5 #6.
+- **Fidelity is checked from the code end.** The primary guarantee is that `code → lift →
+  transpile` reproduces the original code (modulo formatting); the existing `transpile → lift →
+  transpile` fixed point still holds and validates the IR↔code isomorphism on the supported subset.
 
 ## 2. The system model
 
@@ -152,6 +176,9 @@ after the fact. That's a known wart — see Issue #5. They should be **derived**
   important prototype — it embodies the navigation + invariant model.
 
 Both are hand-laid-out and hard-coded. They prove the model; they are not architecture.
+(Note: `prototype-transpile.html` predates the code-first decision — it hand-authors IR and
+transpiles. The IR↔code machinery it shows is exactly what `lift` now drives in the *other*
+direction; the multi-backend + hybrid-wire ideas carry over unchanged.)
 
 ## 5. Open issues / roadmap (the actual work)
 
@@ -181,30 +208,43 @@ direct. Revisit only if you need effect tracking/purity guarantees.
 module's contract so they can't drift, turning the invariant from "checked after the fact" into
 "impossible to express incorrectly." Surfaced while building the navigator.
 
+**#6 — Lifter coverage (the code-first gate).** Under the code-first authoring model the lifter is
+the front door every program passes through, so its accepted subset *is* the language the AI may
+write. Today it rejects closures, early/multiple returns, and more. Widening coverage — while
+keeping the loud-reject discipline — is what makes real programs authorable. Pair each new
+construct with a `code → lift → transpile` round-trip test so coverage can't regress into lossiness.
+
 Suggested order: **#1 (layout)** to make the visualizer general, then **#3 (types)** +
-**#4 (effects)** together to make the IR semantically complete, then **#5** as a correctness
-hardening pass.
+**#4 (effects)** + **#6 (lifter coverage)** together to make the IR semantically complete and the
+code-first gate wide enough for real programs, then **#5** as a correctness hardening pass.
 
 ## 6. Suggested architecture for the real build
 
-Three independent components around a single IR (mirrors the three problems that stayed separate):
+Four independent components around a single IR:
 
 1. **IR core** — schema, validation (structural + type + invariant), serialization. The "language."
-   This is what the AI emits. Define it as a strict schema (zod / JSON Schema / a typed parser)
-   so malformed graphs are rejected at the door.
-2. **Transpiler** — IR → target source. One pass per backend (JS, Python). Pure function of the IR.
-3. **Renderer** — IR → audit diagram. Auto-layout (elk/dagre) → SVG. Stateless per canvas;
+   This is what the **lifter produces** and what the transpiler + renderer consume. Define it as a
+   strict schema (zod / JSON Schema / a typed parser) so malformed graphs are rejected at the door.
+2. **Lifter** — source code → IR. The front door under the code-first model: parse → neutral AST →
+   IR, threading provenance spans, **rejecting unsupported constructs loudly** (never lossily). Its
+   accepted subset defines what the AI is allowed to author.
+3. **Transpiler** — IR → target source. One pass per backend (JS, Python). Pure function of the IR;
+   under code-first it serves cross-backend regeneration (lift TS → transpile Python), not authoring.
+4. **Renderer** — IR → audit diagram. Auto-layout (elk/dagre) → SVG. Stateless per canvas;
    navigation state (breadcrumb stack, current module) lives in the app shell around it.
 
-Keep them decoupled: the transpiler and renderer should each consume the validated IR and share
-nothing else. A bad IR should fail in component #1, never in #2 or #3.
+Keep them decoupled: lifter, transpiler, and renderer each consume/produce the validated IR and
+share nothing else. Bad input should fail at the lifter or IR core, never in the transpiler or renderer.
 
 Stack suggestion (matches your tooling): TypeScript throughout; the renderer as a React/Canvas or
 React/SVG app; **elkjs** for layout; **zod** for IR validation.
 
 ## 7. First milestone to aim for
 
-A round-trip of the *real* pipeline on one non-trivial example:
-emit a hand-written IR JSON → validate it (structural + invariant + types) → transpile to JS *and*
-Python → auto-layout + render the navigable canvas tree. When you can drop in a new IR file and get
-both correct code and a correct navigable diagram **with zero hand-placement**, the foundation is real.
+A code-first run of the *real* pipeline on one non-trivial example:
+write a non-trivial program in the supported subset → `lift` it to IR (loud-reject on anything
+unsupported) → validate (structural + invariant + types) → auto-layout + render the navigable canvas
+tree → optionally `transpile` the lifted IR to the *other* backend (TS↔Python) to prove the IR stayed
+language-neutral. When you can point the pipeline at a new code file and get a correct, navigable
+diagram **with zero hand-placement** — and a `code → lift → transpile` round-trip that reproduces the
+source — the foundation is real.

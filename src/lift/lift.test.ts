@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateSystem } from "../ir/index.js";
 import { transpile } from "../transpile/index.js";
@@ -367,6 +369,65 @@ describe.skipIf(!hasPython())("lift: provenance links nodes back to source spans
     expect(thr.prov && sliceOf(SRC, thr.prov)).toBe('raise ValueError("negative quantity")');
     expect(effect.prov && sliceOf(SRC, effect.prov)).toBe("print(qty)");
   });
+});
+
+/**
+ * Behavioral round-trip: code → lift → transpile must preserve *meaning*, not
+ * just structure. We run the hand-written original and the round-tripped output
+ * against the same driver and compare stdout. The original's own runtime output
+ * is the oracle — no hardcoded expectation — so this is immune to the benign
+ * differences (formatting, identifier casing, ternary/return-select desugaring)
+ * that would defeat a text comparison, while still catching real lift loss
+ * (a dropped statement or altered control flow changes observable behavior).
+ *
+ * The sources are deliberately non-canonical (no doubled parens, names the
+ * transpiler never chose) — code the transpiler never produced.
+ */
+describe("lift: behavioral round-trip preserves observable behavior (TS)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kontur-rt-"));
+  const tsx = fileURLToPath(new URL("../../node_modules/.bin/tsx", import.meta.url));
+
+  /** Write `src` + `driver` to a file, execute, return trimmed stdout. */
+  function runTS(src: string, driver: string, tag: string): string {
+    const file = join(dir, `${tag}.ts`);
+    writeFileSync(file, `${src}\n${driver}\n`);
+    return execFileSync(tsx, [file], { encoding: "utf8" }).trim();
+  }
+
+  const cases: { name: string; src: string; driver: string }[] = [
+    {
+      name: "for-loop with effect",
+      src: "export function countup(limit: number): void {\n  for (let i = 1; i <= limit; i++) {\n    console.log(i);\n  }\n}\n",
+      driver: "countup(3);",
+    },
+    {
+      name: "loop + branch with effect arms (fizzbuzz-shaped)",
+      src: "export function parity(limit: number): void {\n  for (let i = 1; i <= limit; i++) {\n    if (i % 2 === 0) {\n      console.log(\"even\");\n    } else {\n      console.log(\"odd\");\n    }\n  }\n}\n",
+      driver: "parity(4);",
+    },
+    {
+      name: "for-of + a ternary-returning helper",
+      src: "export function sign(x: number): string {\n  return x < 0 ? \"neg\" : \"pos\";\n}\nexport function signs(items: number[]): void {\n  for (const item of items) {\n    console.log(sign(item));\n  }\n}\n",
+      driver: "signs([3, -1, 0]);",
+    },
+    {
+      name: "both-arm returns → select",
+      src: "export function classify(x: number): string {\n  if (x < 0) {\n    return \"neg\";\n  } else {\n    return \"pos\";\n  }\n}\n",
+      driver: 'console.log(classify(-5));\nconsole.log(classify(2));',
+    },
+  ];
+
+  for (const { name, src, driver } of cases) {
+    it(`${name}: round-tripped code behaves identically to the original`, () => {
+      const sys = liftTypeScript(src);
+      expect(validateSystem(sys).ok).toBe(true);
+      const roundTripped = transpile(sys, "ts");
+      const tag = name.replace(/\W+/g, "-");
+      const expected = runTS(src, driver, `${tag}-orig`);
+      const actual = runTS(roundTripped, driver, `${tag}-rt`);
+      expect(actual).toBe(expected);
+    });
+  }
 });
 
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
