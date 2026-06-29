@@ -11,6 +11,7 @@
  * No framework, no build step: vanilla JS, opens straight in a browser.
  */
 import type { System } from "../ir/schema.js";
+import { defaultTheme, KINDS, type Theme } from "./theme.js";
 
 export interface Canvas {
   moduleId: string;
@@ -18,7 +19,7 @@ export interface Canvas {
   svg: string;
 }
 
-export function renderHtml(system: System, canvases: Canvas[]): string {
+export function renderHtml(system: System, canvases: Canvas[], theme: Theme = defaultTheme): string {
   const titles: Record<string, string> = {};
   for (const c of canvases) titles[c.moduleId] = c.title;
 
@@ -37,6 +38,14 @@ export function renderHtml(system: System, canvases: Canvas[]): string {
     )
     .join("");
 
+  const kindLegend = KINDS.map((k) => {
+    const s = theme.kinds[k.kind];
+    const note = k.kind === "module" ? " — click to descend" : "";
+    return (
+      `<div class="legend-row"><span class="kind-chip" style="background:${attr(s.fill)};border-color:${attr(s.stroke)};color:${attr(s.stroke)}">${esc(k.glyph)}</span>${esc(k.label)}${note}</div>`
+    );
+  }).join("");
+
   const bootData = JSON.stringify({ titles, features });
 
   return `<!doctype html>
@@ -45,7 +54,7 @@ export function renderHtml(system: System, canvases: Canvas[]): string {
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Kontur — ${esc(systemTitle(system, titles))}</title>
-<style>${CSS}</style>
+<style>${css(theme)}</style>
 </head>
 <body>
 <aside class="sidebar">
@@ -54,10 +63,11 @@ export function renderHtml(system: System, canvases: Canvas[]): string {
   <div class="section-label">Features</div>
   <nav class="features">${featureList || '<div class="empty">no features</div>'}</nav>
   <div class="legend">
-    <div class="section-label">Legend</div>
-    <div class="legend-row"><span class="swatch control"></span>control wire — execution order</div>
-    <div class="legend-row"><span class="swatch data"></span>data wire — values</div>
-    <div class="legend-row"><span class="dot link"></span>module — click to descend</div>
+    <div class="section-label">Wires</div>
+    <div class="legend-row"><span class="swatch control"></span>control — execution order</div>
+    <div class="legend-row"><span class="swatch data"></span>data — values</div>
+    <div class="section-label">Nodes</div>
+    ${kindLegend}
   </div>
 </aside>
 <main class="main">
@@ -75,30 +85,32 @@ function systemTitle(system: System, titles: Record<string, string>): string {
   return first ? (titles[first] ?? first) : "system";
 }
 
-const CSS = `
-:root{--bg:#0e1116;--panel:#11151c;--line:#222936;--text:#e6e9ef;--muted:#8b93a7;--accent:#36c6d6;}
+/** Build the viewer stylesheet from a theme. */
+function css(t: Theme): string {
+  return `
+:root{--bg:${t.bg};--panel:${t.panel};--line:${t.line};--text:${t.text};--muted:${t.textMuted};--accent:${t.accent};--accent-soft:${t.accentSoft};--accent-text:${t.accentText};--hover:${t.surfaceHover};--control:${t.edgeControl};--data:${t.edgeData};}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{display:flex;background:var(--bg);color:var(--text);font:14px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif}
-.sidebar{width:240px;flex:0 0 240px;border-right:1px solid var(--line);padding:18px 16px;overflow:auto}
+.sidebar{width:240px;flex:0 0 240px;border-right:1px solid var(--line);padding:18px 16px;overflow:auto;background:var(--panel)}
 .brand{font-weight:650;font-size:18px;letter-spacing:.02em}
 .brand-sub{color:var(--muted);font-size:12px;margin-bottom:20px}
 .section-label{text-transform:uppercase;letter-spacing:.08em;font-size:11px;color:var(--muted);margin:18px 0 8px}
 .features{display:flex;flex-direction:column;gap:4px}
 .feature{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:var(--text);padding:7px 10px;border-radius:7px;cursor:pointer;font:inherit}
-.feature:hover{background:#161b24}
-.feature.current{background:#0f2e33;border-color:var(--accent);color:#bff0f6}
+.feature:hover{background:var(--hover)}
+.feature.current{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
 .empty{color:var(--muted);font-size:13px}
 .legend{margin-top:8px}
 .legend-row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;margin:6px 0}
 .swatch{width:18px;height:0;border-top-width:3px;border-top-style:solid;display:inline-block}
-.swatch.control{border-color:#e7eaf3}
-.swatch.data{border-color:#5b9cff}
-.dot.link{width:11px;height:11px;border:1.5px solid var(--accent);border-radius:3px;display:inline-block}
+.swatch.control{border-color:var(--control)}
+.swatch.data{border-color:var(--data)}
+.kind-chip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:15px;border:1px solid;border-radius:4px;font-size:10px;line-height:1;flex:0 0 auto}
 .main{flex:1;display:flex;flex-direction:column;min-width:0}
 .breadcrumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:14px 20px;border-bottom:1px solid var(--line);min-height:50px}
 .crumb{background:transparent;border:none;color:var(--text);cursor:pointer;font:inherit;padding:4px 8px;border-radius:6px}
-.crumb:hover{background:#161b24}
+.crumb:hover{background:var(--hover)}
 .crumb:last-child{color:var(--accent);font-weight:600}
 .crumb:last-child:hover{background:transparent;cursor:default}
 .sep{color:var(--muted)}
@@ -108,10 +120,11 @@ body{display:flex;background:var(--bg);color:var(--text);font:14px/1.4 ui-sans-s
 .canvas-scroll{padding:28px;min-width:max-content}
 .kontur-canvas{display:block}
 .node-link{cursor:pointer}
-.node-link:hover rect{filter:brightness(1.25)}
+.node-link:hover rect:first-of-type{stroke-width:2.5}
 .node-link:focus{outline:none}
 .node-link:focus rect:first-of-type{stroke-width:2.5}
 `;
+}
 
 const SCRIPT = `
 (function(){
