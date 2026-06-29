@@ -101,9 +101,11 @@ Node =
   | { kind:"try",      label }                 // protected block; control-outs body/catch/done,
                                                //   data-out "error" (catch-all; no exception type).
                                                //   label = catch binding name.
-  | { kind:"throw",    label }                 // raise an error; data-in "value" = message. TERMINAL
+  | { kind:"throw",    label, errorType? }     // raise an error; data-in "value" = message. TERMINAL
                                                //   (no control-out: control escapes). The raising
-                                               //   counterpart of try; catch-all, no exception type.
+                                               //   counterpart of try. Optional errorType names the
+                                               //   constructor (throw new TypeError / raise TypeError);
+                                               //   absent ⇒ catch-all Error/Exception.
   | { kind:"effect",   label, io }             // side effect / IO, leaf
   | { kind:"const",    label, value }          // literal, leaf
   | { kind:"select",   label }                 // value-level conditional (data mux / ternary)

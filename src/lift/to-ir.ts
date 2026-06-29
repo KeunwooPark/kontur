@@ -197,8 +197,9 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
     case "throw": {
       // A terminal control node: the message flows into pin "value"; there is no
       // control-out, so the chain dead-ends here (control escapes the function) —
-      // exactly like a branch arm. Returning null stops the enclosing block.
-      const id = newNode(ctx, { kind: "throw", label: "throw" });
+      // exactly like a branch arm. Returning null stops the enclosing block. A
+      // typed/custom error carries its constructor name on the node's `errorType`.
+      const id = newNode(ctx, { kind: "throw", label: "throw", ...(s.errorType ? { errorType: s.errorType } : {}) });
       ctx.wires.push([lowerExpr(ctx, s.arg), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return null;

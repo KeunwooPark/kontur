@@ -215,6 +215,13 @@ describe("lift: control & collection constructs round-trip (TS)", () => {
       src: "export function risky(n: number): void {\n  try {\n    console.log(n);\n  } catch (e) {\n    throw e;\n  }\n}\n",
       expectA: "    throw e;",
     },
+    {
+      // A typed/custom error → a `throw` node carrying `errorType`; the constructor
+      // name survives the round-trip instead of collapsing to the catch-all `Error`.
+      name: "typed throw (throw new TypeError) → throw node with errorType",
+      src: 'export function risky(n: number): void {\n  if ((n < 0)) {\n    throw new TypeError("negative");\n  }\n  console.log(n);\n}\n',
+      expectA: 'throw new TypeError("negative");',
+    },
   ];
 
   for (const { name, src, expectA } of cases) {
@@ -310,12 +317,28 @@ describe.skipIf(!hasPython())("lift: Python re-raise (rethrow)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python typed raise (throw with errorType)", () => {
+  const SRC = "def risky(n: int) -> None:\n    if n < 0:\n        raise TypeError(\"negative\")\n    print(n)\n";
+
+  it("lifts `raise TypeError(...)` → throw node with errorType and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain('raise TypeError("negative")');
+    expect(codeA).not.toContain("raise Exception"); // the type is preserved, not flattened
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+    // The same IR cross-compiles to a TS typed throw.
+    expect(transpile(sys, "ts")).toContain('throw new TypeError("negative");');
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
-  it("refuses a typed/custom error (throw new TypeError) — the IR carries no exception type", () => {
+  it("refuses a thrown bare literal (throw \"x\") — not an error construction nor a named value", () => {
     const src = [
       "export function risky(n: number): void {",
       "  if ((n < 0)) {",
-      '    throw new TypeError("negative");',
+      '    throw "negative";',
       "  }",
       "  console.log(n);",
       "}",

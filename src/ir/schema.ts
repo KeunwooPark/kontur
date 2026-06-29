@@ -81,10 +81,14 @@ export const Node = z.discriminatedUnion("kind", [
   // Raise an exception. Control-in enters; one data-in "value" is the message.
   // There is NO control-out: control leaves the visible graph (non-local), so the
   // node is TERMINAL — drawn as a dead-end, the honest picture of an escape. It is
-  // the raising counterpart of `try`, and shares its catch-all stance: the IR
-  // models only "raise an error carrying a message" (TS `throw new Error(msg)` /
-  // Py `raise Exception(msg)`), never an exception type. `label` is always "throw".
-  z.object({ ...nodeBase, kind: z.literal("throw"), label: z.string() }).strict(),
+  // the raising counterpart of `try`. The IR models "raise an error carrying a
+  // message" (TS `throw new Error(msg)` / Py `raise Exception(msg)`); the optional
+  // `errorType` names the error constructor for a typed/custom error (TS `throw new
+  // TypeError(msg)` / Py `raise TypeError(msg)`). Absent ⇒ the catch-all
+  // `Error`/`Exception`, mirroring `try`'s catch-all handler. `errorType` is the one
+  // place the IR carries an exception type — a bare name passed across backends,
+  // like any other identifier (e.g. a stub call). `label` is always "throw".
+  z.object({ ...nodeBase, kind: z.literal("throw"), label: z.string(), errorType: z.string().min(1).optional() }).strict(),
   // Re-raise an EXISTING exception value (a bare rethrow). Like `throw`, it is
   // TERMINAL — control-in, one data-in "value", no control-out. The difference is
   // semantic and deliberate: `throw` constructs a fresh error from a message and

@@ -62,7 +62,9 @@ function stmt(s: Stmt, indent: string): string[] {
     case "stateSet":
       return [`${indent}this.${camel(s.attr)} = ${expr(s.value)};`];
     case "throw":
-      return [`${indent}throw new Error(${expr(s.arg)});`];
+      // Absent errorType ⇒ the catch-all `Error`; a named type emits that
+      // constructor (`throw new TypeError(...)`).
+      return [`${indent}throw new ${s.errorType ?? "Error"}(${expr(s.arg)});`];
     case "rethrow":
       return [`${indent}throw ${expr(s.value)};`];
     case "return":

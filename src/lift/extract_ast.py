@@ -130,21 +130,24 @@ def stmt(s):
         # Two raising shapes are modelled, mirroring the two IR nodes:
         #   raise Exception(msg) -> throw    (construct a fresh error from a message)
         #   raise e              -> rethrow   (re-raise an existing value unchanged)
-        # A bare `raise` (implicit current exception, no value to wire), a `from`
-        # cause, or a typed/custom exception is beyond the catch-all model, so it is
-        # refused rather than approximated.
+        # Constructing any single-arg exception type maps too: the constructor name
+        # rides on the throw node's `errorType` (`Exception` stays the catch-all
+        # default, left implicit). A bare `raise`, a `from` cause, or a non-call /
+        # non-name value is beyond the model, so it is refused, not approximated.
         exc = s.exc
         if (
             s.cause is None
             and isinstance(exc, ast.Call)
             and isinstance(exc.func, ast.Name)
-            and exc.func.id == "Exception"
             and len(exc.args) == 1
         ):
-            return {"t": "throw", "arg": expr(exc.args[0])}
+            node = {"t": "throw", "arg": expr(exc.args[0])}
+            if exc.func.id != "Exception":
+                node["errorType"] = exc.func.id
+            return node
         if s.cause is None and isinstance(exc, ast.Name):
             return {"t": "rethrow", "value": {"t": "var", "name": exc.id}}
-        raise SystemExit("lift(py): unsupported raise (only `raise Exception(message)` or re-raising a value `raise e` is modelled)")
+        raise SystemExit("lift(py): unsupported raise (only `raise <Exception>(message)` or re-raising a value `raise e` is modelled)")
     if isinstance(s, ast.Try):
         # The IR models a single catch-all handler with no exception type. Refuse
         # finally/else and multiple/typed handlers rather than silently drop the
