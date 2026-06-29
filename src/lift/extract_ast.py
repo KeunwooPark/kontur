@@ -112,6 +112,25 @@ def stmt(s):
         if s.value.func.id == "print":
             return {"t": "print", "arg": expr(s.value.args[0])}
         return {"t": "expr", "expr": expr(s.value)}
+    if isinstance(s, ast.Try):
+        # The IR models a single catch-all handler with no exception type. Refuse
+        # finally/else and multiple/typed handlers rather than silently drop the
+        # type info or non-local control flow we cannot faithfully reproduce.
+        if s.finalbody or s.orelse:
+            raise SystemExit("lift(py): unsupported try/finally or try/else (no IR node)")
+        if len(s.handlers) != 1:
+            raise SystemExit("lift(py): unsupported try with multiple/zero except handlers")
+        h = s.handlers[0]
+        if not (h.type is None or (isinstance(h.type, ast.Name) and h.type.id == "Exception")):
+            raise SystemExit("lift(py): unsupported typed except (IR catch is catch-all)")
+        out = {
+            "t": "try",
+            "body": [stmt(x) for x in s.body],
+            "handler": [stmt(x) for x in h.body],
+        }
+        if h.name:
+            out["catchParam"] = h.name
+        return out
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 

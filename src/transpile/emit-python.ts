@@ -82,6 +82,14 @@ function stmt(s: Stmt, indent: string): string[] {
       for (const b of s.body) out.push(...stmt(b, indent + "    "));
       return out;
     }
+    case "try": {
+      const out = [`${indent}try:`];
+      for (const b of s.body) out.push(...stmt(b, indent + "    "));
+      // Python needs a type before `as`; the IR catch is catch-all → `Exception`.
+      out.push(s.catchParam ? `${indent}except Exception as ${snake(s.catchParam)}:` : `${indent}except:`);
+      for (const h of s.handler) out.push(...stmt(h, indent + "    "));
+      return out;
+    }
   }
 }
 

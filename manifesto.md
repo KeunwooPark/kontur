@@ -98,6 +98,9 @@ Node =
   | { kind:"branch",   label }                 // conditional (control), leaf
   | { kind:"loop",     label }                 // counted iteration, leaf
   | { kind:"while",    label }                 // condition-driven iteration, leaf
+  | { kind:"try",      label }                 // protected block; control-outs body/catch/done,
+                                               //   data-out "error" (catch-all; no exception type).
+                                               //   label = catch binding name. No throw/raise node.
   | { kind:"effect",   label, io }             // side effect / IO, leaf
   | { kind:"const",    label, value }          // literal, leaf
   | { kind:"select",   label }                 // value-level conditional (data mux / ternary)

@@ -37,6 +37,12 @@ export type Stmt =
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }
   /** Condition-driven loop: `while cond { … }`. */
   | { t: "while"; cond: Expr; body: Stmt[] }
+  /**
+   * Protected execution: `try { body } catch (catchParam) { handler }`. The
+   * IR has catch-all semantics (no exception type); `catchParam` is absent when
+   * the source binds no error variable (`catch {}` / bare `except:`).
+   */
+  | { t: "try"; body: Stmt[]; catchParam?: string; handler: Stmt[] }
   | { t: "return"; expr: Expr }
   /** Return several named values (multi-output module). */
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] };

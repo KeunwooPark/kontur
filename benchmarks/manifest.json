@@ -146,12 +146,20 @@
       "note": "A range comprehension lowers to a `comprehension` node — range bounds + a bound `index` + an element expression that reads it. Emitted as a Python comprehension and a TS range-map."
     },
     {
-      "id": "try-catch",
-      "file": "cases/unsupported/try-catch.ts",
-      "expect": "reject",
+      "id": "19-try-catch",
+      "file": "cases/supported/19-try-catch.ts",
+      "expect": "roundtrip",
       "feature": "exceptions / try-catch",
-      "title": "try/catch (unsupported statement)",
-      "note": "The IR has no exception or non-local control-flow construct; try/catch must be refused, not approximated. Keeps the fail-closed (reject) path under test."
+      "title": "try/catch protected block",
+      "note": "A try/catch lowers to a `try` node — control-out `body`/`catch`/`done` plus a data-out `error` for the caught binding (catch-all semantics; the IR models no exception type). Emitted as TS try/catch and Python try/except."
+    },
+    {
+      "id": "throw",
+      "file": "cases/unsupported/throw.ts",
+      "expect": "reject",
+      "feature": "exceptions / raise",
+      "title": "throw (unsupported statement)",
+      "note": "Catching is now modelled, but RAISING is non-local control flow the IR deliberately has no node for; `throw`/`raise` must be refused, not approximated. Keeps the fail-closed (reject) path under test."
     }
   ]
 }

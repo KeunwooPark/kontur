@@ -22,7 +22,7 @@ import { derivePins, portId, boundaryPortId, pinKey, type Pin } from "./ports.js
 // --- output geometry -------------------------------------------------------
 
 export type NodeKind =
-  | "function" | "branch" | "loop" | "while" | "effect" | "const" | "module"
+  | "function" | "branch" | "loop" | "while" | "try" | "effect" | "const" | "module"
   | "select" | "array" | "comprehension"
   | "state" | "stateGet" | "stateSet"
   | "boundary";
@@ -312,6 +312,9 @@ function nodeLabel(node: System["modules"][string]["interior"]["nodes"][number],
       return typeof node.value === "string" ? JSON.stringify(node.value) : String(node.value);
     case "module":
       return system.modules[node.ref]?.title ?? node.ref;
+    case "try":
+      // `label` holds the catch binding; surface it as `try (e)` for the reader.
+      return node.label ? `try (${node.label})` : "try";
     default:
       return node.label;
   }

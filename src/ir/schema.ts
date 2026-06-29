@@ -66,6 +66,14 @@ export const Node = z.discriminatedUnion("kind", [
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
   // The counted `loop` carries from/to/index; a `while` carries only a predicate.
   z.object({ ...nodeBase, kind: z.literal("while"), label: z.string() }).strict(),
+  // Protected execution (try/catch). Control-in enters the protected block;
+  // control-out "body" runs it, "catch" runs the handler if it raises, and "done"
+  // is the continuation after either path. Data-out "error" is the caught value
+  // (catch-all semantics — the IR models no exception type), wired only when the
+  // handler reads it. `label` is the catch binding name (like a loop's index var),
+  // or "" when the source binds no variable. There is no `throw`/`raise` node:
+  // raising is non-local control flow the IR deliberately does not model.
+  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in

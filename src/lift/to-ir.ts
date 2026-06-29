@@ -163,6 +163,17 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       lowerBlock(ctx, s.body, `${id}:body`);
       return `${id}:done`;
     }
+    case "try": {
+      // Protected block + handler, rejoining at `done`. The catch binding (if
+      // any) is a data-out `error`, bound BEFORE lowering the handler that reads
+      // it — exactly like a counted loop's index. The body never sees it.
+      const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "" });
+      ctx.wires.push([prev, id, "control"]);
+      lowerBlock(ctx, s.body, `${id}:body`);
+      if (s.catchParam) ctx.varMap.set(s.catchParam, `${id}:error`);
+      lowerBlock(ctx, s.handler, `${id}:catch`);
+      return `${id}:done`;
+    }
     case "assign": {
       // Single-assignment dataflow: a reassignment is not a node — it rebinds the
       // name to a fresh data source. The RHS is lowered against the CURRENT
@@ -308,6 +319,7 @@ function assertSupported(fn: Fn): void {
     if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
     if (s.t === "for") s.body.forEach(forbidNested);
     if (s.t === "while") s.body.forEach(forbidNested);
+    if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   };
   fn.body.forEach((s, i) => {
     const isTail = i === fn.body.length - 1;
@@ -315,6 +327,7 @@ function assertSupported(fn: Fn): void {
     else if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
     else if (s.t === "for") s.body.forEach(forbidNested);
     else if (s.t === "while") s.body.forEach(forbidNested);
+    else if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   });
 }
 

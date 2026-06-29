@@ -51,12 +51,14 @@ IR addition:
 | reassignment (`n += 1`) | an SSA-style rebind, no node — round-trips to `n + 1` inline |
 | array literals | an `array` node — a pure list constructor |
 | Python comprehensions | a `comprehension` node — range + bound index + element expr |
+| try/catch | a `try` node — control-out `body`/`catch`/`done` + a data-out `error` binding |
 
 …all in TypeScript and (where applicable) Python.
 
 `cases/unsupported/` — constructs still outside the IR vocabulary that must be
-refused: exception handling (`try`/`catch`), which has no non-local control-flow
-form in the IR. This keeps the fail-closed (reject) path exercised.
+refused: raising exceptions (`throw`/`raise`), which is non-local control flow
+with no IR node. (Catching is now modelled by the `try` node above; raising is
+not.) This keeps the fail-closed (reject) path exercised.
 
 ## Adding a case
 

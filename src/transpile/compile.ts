@@ -172,6 +172,19 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "try") {
+        // `label` carries the catch binding name (empty ⇒ no bound variable).
+        const v = identifier(node.label);
+        stmts.push({
+          t: "try",
+          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+          ...(v ? { catchParam: v } : {}),
+          handler: this.flowFrom(this.controlTargetFrom(`${node.id}:catch`)),
+        });
+        cur = this.controlTargetFrom(`${node.id}:done`);
+        continue;
+      }
+
       if (node.kind === "stateSet") {
         stmts.push({ t: "stateSet", attr: node.attr, value: this.resolveInput(node.id, "value") });
         cur = this.controlNext(node.id);
@@ -286,6 +299,10 @@ class ModuleCompiler {
     }
     // A comprehension's bound variable, read by its element expression.
     if (src.kind === "comprehension" && ep.port === "index") {
+      return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // A try's caught-error binding, read inside its handler.
+    if (src.kind === "try" && ep.port === "error") {
       return { t: "var", name: identifier(src.label) || src.id };
     }
     if (this.hasControlIn.has(src.id)) {
