@@ -82,7 +82,7 @@ class ModuleCompiler {
   private readonly dataWires: [string, string][] = [];
   private readonly controlWires: [string, string][] = [];
   private readonly hasControlIn = new Set<string>();
-  /** loop nodeId → its index variable name. */
+  /** loop / foreach nodeId → its bound variable name (index / item). */
   private readonly loopVar = new Map<string, string>();
 
   constructor(
@@ -172,6 +172,21 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "foreach") {
+        // The item binding is resolved by the body, so register it (like a loop's
+        // index) BEFORE recursing into the body.
+        const v = identifier(node.label) || node.id;
+        this.loopVar.set(node.id, v);
+        stmts.push({
+          t: "foreach",
+          varName: v,
+          iter: this.resolveInput(node.id, "iter"),
+          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+        });
+        cur = this.controlTargetFrom(`${node.id}:done`);
+        continue;
+      }
+
       if (node.kind === "try") {
         // `label` carries the catch binding name (empty ⇒ no bound variable).
         const v = identifier(node.label);
@@ -188,6 +203,12 @@ class ModuleCompiler {
       if (node.kind === "throw") {
         // Terminal: control escapes here, so the chain stops — like a branch arm.
         stmts.push({ t: "throw", arg: this.resolveInput(node.id, "value") });
+        return stmts;
+      }
+
+      if (node.kind === "rethrow") {
+        // Terminal too; the value is re-raised unwrapped (`throw e` / `raise e`).
+        stmts.push({ t: "rethrow", value: this.resolveInput(node.id, "value") });
         return stmts;
       }
 
@@ -306,6 +327,10 @@ class ModuleCompiler {
     // A comprehension's bound variable, read by its element expression.
     if (src.kind === "comprehension" && ep.port === "index") {
       return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // A foreach's bound element, read inside its body.
+    if (src.kind === "foreach" && ep.port === "item") {
+      return { t: "var", name: this.loopVar.get(src.id) ?? src.id };
     }
     // A try's caught-error binding, read inside its handler.
     if (src.kind === "try" && ep.port === "error") {

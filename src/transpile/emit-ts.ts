@@ -63,6 +63,8 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}this.${camel(s.attr)} = ${expr(s.value)};`];
     case "throw":
       return [`${indent}throw new Error(${expr(s.arg)});`];
+    case "rethrow":
+      return [`${indent}throw ${expr(s.value)};`];
     case "return":
       return [`${indent}return ${expr(s.expr)};`];
     case "returnObject":
@@ -86,6 +88,12 @@ function stmt(s: Stmt, indent: string): string[] {
     }
     case "while": {
       const out = [`${indent}while (${expr(s.cond)}) {`];
+      for (const b of s.body) out.push(...stmt(b, indent + "  "));
+      out.push(`${indent}}`);
+      return out;
+    }
+    case "foreach": {
+      const out = [`${indent}for (const ${camel(s.varName)} of ${expr(s.iter)}) {`];
       for (const b of s.body) out.push(...stmt(b, indent + "  "));
       out.push(`${indent}}`);
       return out;

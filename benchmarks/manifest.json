@@ -170,12 +170,44 @@
       "note": "The same `throw` node through the Python backend: `raise Exception(message)` lifts and round-trips, and the guard continuation folds into the branch's surviving arm exactly as in TypeScript."
     },
     {
-      "id": "rethrow",
-      "file": "cases/unsupported/rethrow.ts",
-      "expect": "reject",
+      "id": "22-foreach",
+      "file": "cases/supported/22-foreach.ts",
+      "expect": "roundtrip",
+      "feature": "for-each loop",
+      "title": "for-of over a collection",
+      "note": "A `for...of` lowers to a `foreach` node — the third loop sibling. Where the counted `loop` carries from/to/index and the `while` carries a predicate, `foreach` carries one data-in `iter` (the collection) and a data-out `item` (the bound element, read by the body). Control-out `body`/`done` exactly like the other loops; emitted as TS `for (const x of xs)` and Python `for x in xs`."
+    },
+    {
+      "id": "23-py-foreach",
+      "file": "cases/supported/23-py-foreach.py",
+      "expect": "roundtrip",
+      "feature": "for-each loop (python)",
+      "title": "Python for-in over a collection",
+      "note": "The same `foreach` node through the Python backend. A non-`range` `for x in items:` is the collection loop (the `range` form stays the counted `loop`); it round-trips as `for item in items`."
+    },
+    {
+      "id": "24-rethrow",
+      "file": "cases/supported/24-rethrow.ts",
+      "expect": "roundtrip",
       "feature": "exceptions / re-raise",
-      "title": "re-raise a caught value (unsupported)",
-      "note": "Raising IS now modelled — but only an error carrying a message (`throw new Error(msg)`). Re-raising a caught value (`throw e`) throws a non-message, non-local value the catch-all IR has no node for, so it must be refused, not approximated. Keeps the fail-closed (reject) path under test."
+      "title": "re-raise a caught value (throw e)",
+      "note": "Re-raising a caught value lowers to a `rethrow` node — the terminal sibling of `throw`. Where `throw` constructs a fresh error from a message and WRAPS it (`new Error(msg)`), `rethrow` passes its data-in `value` on UNCHANGED (`throw e`). Inside a catch, `value` wires straight from the `try` node's caught-error binding. Emitted as TS `throw e` and Python `raise e`."
+    },
+    {
+      "id": "25-py-rethrow",
+      "file": "cases/supported/25-py-rethrow.py",
+      "expect": "roundtrip",
+      "feature": "exceptions / re-raise (python)",
+      "title": "Python re-raise a caught value (raise e)",
+      "note": "The same `rethrow` node through the Python backend: `raise e` (a named value, not wrapped) lifts and round-trips. A bare `raise` — the implicit current exception, with no value to wire — stays refused."
+    },
+    {
+      "id": "typed-throw",
+      "file": "cases/unsupported/typed-throw.ts",
+      "expect": "reject",
+      "feature": "exceptions / typed error",
+      "title": "throw a typed/custom error (unsupported)",
+      "note": "Raising is now modelled two ways — a fresh `Error` carrying a message (`throw`) and re-raising an existing value (`rethrow`). But a typed/custom error (`throw new TypeError(msg)`) carries an exception TYPE the catch-all IR has no node for, so it must be refused, not approximated. Keeps the fail-closed (reject) path under test."
     }
   ]
 }
