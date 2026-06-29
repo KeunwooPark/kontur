@@ -15,11 +15,19 @@ export type Expr =
   | { t: "stateGet"; attr: string }
   | { t: "bin"; op: Op; a: Expr; b: Expr }
   | { t: "un"; op: Op; x: Expr }
+  /** A value-level conditional (ternary): `cond ? then : else`. */
+  | { t: "cond"; cond: Expr; then: Expr; else: Expr }
+  /** A list literal: `[e0, e1, …]`. */
+  | { t: "array"; elems: Expr[] }
+  /** A list comprehension over an inclusive range: `[elem for v in from..to]`. */
+  | { t: "comprehension"; varName: string; from: Expr; to: Expr; elem: Expr }
   /** A call to a generated function: a helper (stub) or another module. */
   | { t: "call"; name: string; args: Expr[] };
 
 export type Stmt =
   | { t: "let"; name: string; expr: Expr }
+  /** Reassign an existing binding: `name = expr` / `name += …`. */
+  | { t: "assign"; name: string; expr: Expr }
   | { t: "expr"; expr: Expr }
   | { t: "print"; arg: Expr }
   /** Write an attribute of the enclosing class: `this.attr = value`. */
@@ -27,6 +35,8 @@ export type Stmt =
   | { t: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
   /** Inclusive counted loop: `for v in from..to`. */
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }
+  /** Condition-driven loop: `while cond { … }`. */
+  | { t: "while"; cond: Expr; body: Stmt[] }
   | { t: "return"; expr: Expr }
   /** Return several named values (multi-output module). */
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] };

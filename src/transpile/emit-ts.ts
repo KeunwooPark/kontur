@@ -37,6 +37,14 @@ function expr(e: Expr): string {
     case "stateGet": return `this.${camel(e.attr)}`;
     case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
     case "un": return `(!${expr(e.x)})`;
+    case "cond": return `(${expr(e.cond)} ? ${expr(e.then)} : ${expr(e.else)})`;
+    case "array": return `[${e.elems.map(expr).join(", ")}]`;
+    case "comprehension": {
+      // TS has no comprehension syntax; emit a range-map. The bound variable runs
+      // 0-based, matching the example-level `from === 0` comprehensions we lift.
+      const v = camel(e.varName);
+      return `Array.from({ length: ${expr(e.to)} - ${expr(e.from)} + 1 }, (_, ${v}) => ${expr(e.elem)})`;
+    }
     case "call": return `${camel(e.name)}(${e.args.map(expr).join(", ")})`;
   }
 }
@@ -45,6 +53,8 @@ function stmt(s: Stmt, indent: string): string[] {
   switch (s.t) {
     case "let":
       return [`${indent}const ${camel(s.name)} = ${expr(s.expr)};`];
+    case "assign":
+      return [`${indent}${camel(s.name)} = ${expr(s.expr)};`];
     case "expr":
       return [`${indent}${expr(s.expr)};`];
     case "print":
@@ -68,6 +78,12 @@ function stmt(s: Stmt, indent: string): string[] {
     case "for": {
       const v = camel(s.varName);
       const out = [`${indent}for (let ${v} = ${expr(s.from)}; ${v} <= ${expr(s.to)}; ${v}++) {`];
+      for (const b of s.body) out.push(...stmt(b, indent + "  "));
+      out.push(`${indent}}`);
+      return out;
+    }
+    case "while": {
+      const out = [`${indent}while (${expr(s.cond)}) {`];
       for (const b of s.body) out.push(...stmt(b, indent + "  "));
       out.push(`${indent}}`);
       return out;

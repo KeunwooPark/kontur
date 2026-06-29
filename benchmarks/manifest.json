@@ -90,60 +90,68 @@
       "note": "Same class model through the Python backend: `self.attr` access, methods drop the implicit self, round-trips."
     },
     {
-      "id": "while-loop",
-      "file": "cases/unsupported/while-loop.ts",
-      "expect": "reject",
-      "feature": "while loop",
-      "title": "while loop (unsupported statement)",
-      "note": "Only counted for-loops exist in the IR; a while must be refused, not approximated."
-    },
-    {
-      "id": "early-return",
-      "file": "cases/unsupported/early-return.ts",
-      "expect": "reject",
-      "feature": "early/branch return",
-      "title": "Return inside branch arms",
-      "note": "The IR has one boundary out-port fed by one wire, so only a single tail return is representable."
-    },
-    {
-      "id": "array-literal",
-      "file": "cases/unsupported/array-literal.ts",
-      "expect": "reject",
-      "feature": "array literal",
-      "title": "Array literal (unsupported expression)",
-      "note": "No composite/collection types in the IR vocabulary yet (see manifesto open issue #3, types)."
-    },
-    {
-      "id": "ternary",
-      "file": "cases/unsupported/ternary.ts",
-      "expect": "reject",
-      "feature": "conditional expression",
-      "title": "Ternary expression",
-      "note": "Conditionals are control-wire branches, not data expressions; a ternary has no IR form."
-    },
-    {
-      "id": "reassign",
-      "file": "cases/unsupported/reassign.ts",
-      "expect": "reject",
-      "feature": "mutation / augmented assignment",
-      "title": "In-place reassignment (n += 1)",
-      "note": "Dataflow is single-assignment; mutating a binding has no wire representation."
-    },
-    {
-      "id": "template-string",
-      "file": "cases/unsupported/template-string.ts",
-      "expect": "reject",
-      "feature": "template literal",
+      "id": "12-template-string",
+      "file": "cases/supported/12-template-string.ts",
+      "expect": "roundtrip",
+      "feature": "concat / template",
       "title": "Template string interpolation",
-      "note": "String interpolation needs a concat/format effect the IR does not model."
+      "note": "A template literal lowers to a `concat` chain over its string parts and interpolations — the IR's string-join op, emitted as `+` in every backend. No new node kind needed."
     },
     {
-      "id": "py-comprehension",
-      "file": "cases/unsupported/py-comprehension.py",
-      "expect": "reject",
+      "id": "13-while-loop",
+      "file": "cases/supported/13-while-loop.ts",
+      "expect": "roundtrip",
+      "feature": "while loop",
+      "title": "Condition-driven while loop",
+      "note": "A `while` node — the condition-driven sibling of the counted `loop`: one data-in `cond`, control-out `body`/`done`. The back-edge is implicit, like the counted loop."
+    },
+    {
+      "id": "14-ternary",
+      "file": "cases/supported/14-ternary.ts",
+      "expect": "roundtrip",
+      "feature": "select / value conditional",
+      "title": "Ternary expression",
+      "note": "A ternary lowers to a `select` node — a pure data multiplexer (cond/then/else → value), the data-wire analogue of the control-wire `branch` (Blueprints' Select node)."
+    },
+    {
+      "id": "15-early-return",
+      "file": "cases/supported/15-early-return.ts",
+      "expect": "roundtrip",
+      "feature": "branch-arm returns → select",
+      "title": "Return inside both branch arms",
+      "note": "A tail if/else whose arms each return is normalized to a single `return select(cond, then, else)` — branch-arm returns become one representable data multiplexer instead of multiple control exits."
+    },
+    {
+      "id": "16-reassign",
+      "file": "cases/supported/16-reassign.ts",
+      "expect": "roundtrip",
+      "feature": "reassignment (SSA rebind)",
+      "title": "In-place reassignment (n += 1)",
+      "note": "Single-assignment dataflow: a reassignment is not a node but an SSA-style rebind of the name to a fresh data source. `n += 1; print(n)` round-trips to `print(n + 1)`."
+    },
+    {
+      "id": "17-array-literal",
+      "file": "cases/supported/17-array-literal.ts",
+      "expect": "roundtrip",
+      "feature": "list literal",
+      "title": "Array / list literal",
+      "note": "An array literal lowers to an `array` node — a pure list constructor with one data-in pin per element. Backends emit `[…]`."
+    },
+    {
+      "id": "18-py-comprehension",
+      "file": "cases/supported/18-py-comprehension.py",
+      "expect": "roundtrip",
       "feature": "list comprehension (python)",
       "title": "Python list comprehension",
-      "note": "Comprehensions are collection-valued expressions outside the IR vocabulary."
+      "note": "A range comprehension lowers to a `comprehension` node — range bounds + a bound `index` + an element expression that reads it. Emitted as a Python comprehension and a TS range-map."
+    },
+    {
+      "id": "try-catch",
+      "file": "cases/unsupported/try-catch.ts",
+      "expect": "reject",
+      "feature": "exceptions / try-catch",
+      "title": "try/catch (unsupported statement)",
+      "note": "The IR has no exception or non-local control-flow construct; try/catch must be refused, not approximated. Keeps the fail-closed (reject) path under test."
     }
   ]
 }

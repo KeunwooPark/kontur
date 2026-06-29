@@ -36,14 +36,27 @@ Each case is declared in `manifest.json` with an `expect`:
 
 ## Cases
 
-`cases/supported/` — the example-level subset Kontur is built for: print
-effects, arithmetic + tail return, sequenced stub calls, counted loops,
-branches, FizzBuzz, multi-module call graphs (navigation), **classes**
-(modules-as-methods + state-as-attributes), and the same in Python.
+`cases/supported/` — the subset Kontur lifts and round-trips: print effects,
+arithmetic + tail return, sequenced stub calls, counted loops, branches,
+FizzBuzz, multi-module call graphs (navigation), **classes** (modules-as-methods
++ state-as-attributes), and a second wave of constructs each carried by a small
+IR addition:
 
-`cases/unsupported/` — constructs outside the IR vocabulary that must be
-refused: while loops, early/branch returns, array literals, ternaries,
-mutation, template strings, and Python comprehensions.
+| construct | how it lifts |
+|---|---|
+| template strings | a `concat` chain over the string parts (`+` in every backend) |
+| while loops | a `while` node — the condition-driven sibling of the counted `loop` |
+| ternaries | a `select` node — a pure data multiplexer (Blueprints' Select) |
+| branch-arm returns | normalized to a single `return select(cond, a, b)` |
+| reassignment (`n += 1`) | an SSA-style rebind, no node — round-trips to `n + 1` inline |
+| array literals | an `array` node — a pure list constructor |
+| Python comprehensions | a `comprehension` node — range + bound index + element expr |
+
+…all in TypeScript and (where applicable) Python.
+
+`cases/unsupported/` — constructs still outside the IR vocabulary that must be
+refused: exception handling (`try`/`catch`), which has no non-local control-flow
+form in the IR. This keeps the fail-closed (reject) path exercised.
 
 ## Adding a case
 

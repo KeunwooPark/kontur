@@ -39,9 +39,44 @@ def expr(e):
         return cur
     if isinstance(e, ast.UnaryOp) and isinstance(e.op, ast.Not):
         return {"t": "un", "op": "not", "x": expr(e.operand)}
+    if isinstance(e, ast.IfExp):
+        return {"t": "cond", "cond": expr(e.test), "then": expr(e.body), "else": expr(e.orelse)}
+    if isinstance(e, ast.List):
+        return {"t": "array", "elems": [expr(el) for el in e.elts]}
+    if (
+        isinstance(e, ast.ListComp)
+        and len(e.generators) == 1
+        and not e.generators[0].ifs
+        and isinstance(e.generators[0].target, ast.Name)
+        and isinstance(e.generators[0].iter, ast.Call)
+        and isinstance(e.generators[0].iter.func, ast.Name)
+        and e.generators[0].iter.func.id == "range"
+        and len(e.generators[0].iter.args) == 2
+    ):
+        gen = e.generators[0]
+        start, stop = gen.iter.args[0], gen.iter.args[1]
+        return {
+            "t": "comprehension",
+            "varName": gen.target.id,
+            "from": expr(start),
+            "to": range_stop_to(stop),
+            "elem": expr(e.elt),
+        }
     if isinstance(e, ast.Call) and isinstance(e.func, ast.Name):
         return {"t": "call", "name": e.func.id, "args": [expr(a) for a in e.args]}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
+
+
+def range_stop_to(stop):
+    """Inverse of the inclusive-range lowering: range(from, to + 1) -> to."""
+    if (
+        isinstance(stop, ast.BinOp)
+        and isinstance(stop.op, ast.Add)
+        and isinstance(stop.right, ast.Constant)
+        and stop.right.value == 1
+    ):
+        return expr(stop.left)
+    return {"t": "bin", "op": "sub", "a": expr(stop), "b": {"t": "lit", "value": 1}}
 
 
 def stmt(s):
@@ -66,14 +101,13 @@ def stmt(s):
         }
     if isinstance(s, ast.For) and isinstance(s.iter, ast.Call) and isinstance(s.iter.func, ast.Name) and s.iter.func.id == "range":
         args = s.iter.args
-        start = expr(args[0])
-        stop = args[1]
-        # Inverse of the inclusive-loop lowering: range(from, to + 1) -> to.
-        if isinstance(stop, ast.BinOp) and isinstance(stop.op, ast.Add) and isinstance(stop.right, ast.Constant) and stop.right.value == 1:
-            to = expr(stop.left)
-        else:
-            to = {"t": "bin", "op": "sub", "a": expr(stop), "b": {"t": "lit", "value": 1}}
-        return {"t": "for", "varName": s.target.id, "from": start, "to": to, "body": [stmt(x) for x in s.body]}
+        return {
+            "t": "for",
+            "varName": s.target.id,
+            "from": expr(args[0]),
+            "to": range_stop_to(args[1]),
+            "body": [stmt(x) for x in s.body],
+        }
     if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and isinstance(s.value.func, ast.Name):
         if s.value.func.id == "print":
             return {"t": "print", "arg": expr(s.value.args[0])}

@@ -24,8 +24,12 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "function", glyph: "ƒ", label: "function" },
   { kind: "branch", glyph: "◆", label: "branch" },
   { kind: "loop", glyph: "↻", label: "loop" },
+  { kind: "while", glyph: "⟲", label: "while loop" },
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
+  { kind: "select", glyph: "⋔", label: "select — value conditional" },
+  { kind: "array", glyph: "▦", label: "list literal" },
+  { kind: "comprehension", glyph: "∀", label: "comprehension" },
   { kind: "module", glyph: "⧉", label: "module" },
   { kind: "state", glyph: "▣", label: "state — attribute" },
   { kind: "stateGet", glyph: "↥", label: "read attribute" },
@@ -89,11 +93,16 @@ export const paper: Theme = {
     function: { fill: "#e4eff7", stroke: "#0072b2" }, // blue
     branch: { fill: "#fbf1da", stroke: "#e69f00" }, // amber
     loop: { fill: "#f7e7f0", stroke: "#cc79a7" }, // reddish purple
+    while: { fill: "#e3f1fb", stroke: "#56b4e9" }, // sky blue — the other loop
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
+    select: { fill: "#f6ead0", stroke: "#a86b00" }, // deep amber — a data conditional
     module: { fill: "#fce8dd", stroke: "#d55e00" }, // vermillion
+    // collection family — one shared teal hue for list-valued producers.
+    array: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    comprehension: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // state family — one shared indigo hue so attributes + their accessors read
-    // as a group, distinct from the six flow kinds above.
+    // as a group, distinct from the flow kinds above.
     state: { fill: "#e6e7fb", stroke: "#4b4fc4" },
     stateGet: { fill: "#eceefc", stroke: "#5a67d8" },
     stateSet: { fill: "#eceefc", stroke: "#5a67d8" },
@@ -118,9 +127,13 @@ export const ink: Theme = {
     function: { fill: "#16263f", stroke: "#4f8cf0" },
     branch: { fill: "#3a2a12", stroke: "#e0a13a" },
     loop: { fill: "#2a1c3d", stroke: "#a878e8" },
+    while: { fill: "#13283a", stroke: "#56b4e9" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
+    select: { fill: "#33270f", stroke: "#d09a3a" },
     module: { fill: "#0f2e33", stroke: "#36c6d6" },
+    array: { fill: "#10303a", stroke: "#2bb5c9" },
+    comprehension: { fill: "#10303a", stroke: "#2bb5c9" },
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },
     stateGet: { fill: "#191b30", stroke: "#7c83e8" },
     stateSet: { fill: "#191b30", stroke: "#7c83e8" },

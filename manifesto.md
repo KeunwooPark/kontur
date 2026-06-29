@@ -95,15 +95,23 @@ Port { name, type, io: "in"|"out", wire: "data"|"control" }
 
 Node =
   | { kind:"function", label }                 // pure transform, leaf
-  | { kind:"branch",   label }                 // conditional, leaf
-  | { kind:"loop",     label }                 // iteration, leaf
+  | { kind:"branch",   label }                 // conditional (control), leaf
+  | { kind:"loop",     label }                 // counted iteration, leaf
+  | { kind:"while",    label }                 // condition-driven iteration, leaf
   | { kind:"effect",   label, io }             // side effect / IO, leaf
   | { kind:"const",    label, value }          // literal, leaf
+  | { kind:"select",   label }                 // value-level conditional (data mux / ternary)
+  | { kind:"array",    label }                 // list literal (pure list constructor)
+  | { kind:"comprehension", label }            // list comprehension over a counted range
   | { kind:"module",   ref:ModuleId, ports }   // a nested module = a link
                                                //   ports MUST equal modules[ref].ports
   | { kind:"state",    label, type }           // a class attribute (a stored cell)
   | { kind:"stateGet", label, attr }           // read an attribute → pure data source
   | { kind:"stateSet", label, attr }           // write an attribute → control-sequenced effect
+
+  // Note: `select` is the data-wire analogue of the control-wire `branch` (a ternary
+  // is a value, not a control split). Branch-arm returns are normalized to a single
+  // tail `return select(...)`, preserving the "one boundary out-port, one wire" model.
 
 Wire = [from, to, kind:"data"|"control"]
   // endpoints: "nodeId", "nodeId:port", or "P:portName" for the module boundary

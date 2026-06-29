@@ -131,11 +131,108 @@ describe.skipIf(!hasPython())("lift: classes (Python)", () => {
   });
 });
 
+describe("lift: template strings lower to the concat op", () => {
+  const SRC = [
+    "export function label(x: number): string {",
+    "  return `value=${x}`;",
+    "}",
+    "",
+  ].join("\n");
+
+  it("lifts a template literal to a `concat` function node", () => {
+    const sys = liftTypeScript(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const ops = sys.modules["label"]!.interior.nodes
+      .filter((n) => n.kind === "function")
+      .map((n) => (n as { op?: string }).op);
+    expect(ops).toContain("concat");
+  });
+
+  it("TS round-trip (lift → transpile → lift → transpile) is a fixed point", () => {
+    const codeA = transpile(liftTypeScript(SRC), "ts");
+    expect(codeA).toContain('return ("value=" + x);');
+    const codeB = transpile(liftTypeScript(codeA), "ts");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("cross-compiles the same IR to Python", () => {
+    expect(transpile(liftTypeScript(SRC), "python")).toContain('return ("value=" + x)');
+  });
+});
+
+describe("lift: control & collection constructs round-trip (TS)", () => {
+  const cases: { name: string; src: string; expectA: string }[] = [
+    {
+      name: "while loop",
+      src: "export function drain(n: number): void {\n  while ((n > 0)) {\n    console.log(n);\n  }\n}\n",
+      expectA: "while ((n > 0)) {",
+    },
+    {
+      name: "ternary → select",
+      src: "export function pick(flag: boolean): number {\n  return (flag ? 1 : 0);\n}\n",
+      expectA: "return (flag ? 1 : 0);",
+    },
+    {
+      // Branch-arm returns normalize to a single `return select(...)`.
+      name: "both-arm returns → select",
+      src: 'export function classify(x: number): string {\n  if ((x < 0)) {\n    return "neg";\n  } else {\n    return "pos";\n  }\n}\n',
+      expectA: 'return ((x < 0) ? "neg" : "pos");',
+    },
+    {
+      // Reassignment is an SSA rebind; `n += 1; print(n)` collapses to `print(n + 1)`.
+      name: "reassignment (n += 1)",
+      src: "export function tick(n: number): void {\n  n += 1;\n  console.log(n);\n}\n",
+      expectA: "console.log((n + 1));",
+    },
+    {
+      name: "array literal",
+      src: "export function makeList(): void {\n  const xs = [1, 2, 3];\n  console.log(xs);\n}\n",
+      expectA: "console.log([1, 2, 3]);",
+    },
+  ];
+
+  for (const { name, src, expectA } of cases) {
+    it(`${name}: lifts, validates, and is a round-trip fixed point`, () => {
+      const sys = liftTypeScript(src);
+      expect(validateSystem(sys).ok).toBe(true);
+      const codeA = transpile(sys, "ts");
+      expect(codeA).toContain(expectA);
+      const codeB = transpile(liftTypeScript(codeA), "ts");
+      expect(codeB).toBe(codeA);
+      // The same IR cross-compiles to Python without throwing.
+      expect(() => transpile(sys, "python")).not.toThrow();
+    });
+  }
+});
+
+describe.skipIf(!hasPython())("lift: Python list comprehension", () => {
+  const SRC = "def squares(n: int) -> None:\n    xs = [i * i for i in range(0, n + 1)]\n    print(xs)\n";
+
+  it("lifts a comprehension and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("[(i * i) for i in range(0, n + 1)]");
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
-  it("refuses early/branch returns", () => {
+  it("refuses exception handling (try/catch)", () => {
     const src = [
-      "export function classify(x: number): string {",
-      "  if ((x < 0)) { return \"neg\"; } else { return \"pos\"; }",
+      "export function risky(n: number): void {",
+      "  try { console.log(n); } catch (e) { console.log(e); }",
+      "}",
+    ].join("\n");
+    expect(() => liftTypeScript(src)).toThrow(/unsupported statement/);
+  });
+
+  it("still refuses a return in the middle of a function (non-tail)", () => {
+    const src = [
+      "export function f(x: number): number {",
+      "  return x;",
+      "  console.log(x);",
       "}",
     ].join("\n");
     expect(() => liftTypeScript(src)).toThrow(/early\/branch return/);
