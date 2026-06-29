@@ -105,6 +105,9 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
       body: block(s.statement, sf),
     };
   }
+  if (ts.isWhileStatement(s)) {
+    return { t: "while", cond: liftExpr(s.expression, sf), body: block(s.statement, sf) };
+  }
   if (
     ts.isExpressionStatement(s) &&
     ts.isBinaryExpression(s.expression) &&
@@ -113,6 +116,23 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
     s.expression.left.expression.kind === ts.SyntaxKind.ThisKeyword
   ) {
     return { t: "stateSet", attr: s.expression.left.name.text, value: liftExpr(s.expression.right, sf) };
+  }
+  // Reassignment of a plain local/param: `x = …` or augmented `x += …`. Dataflow
+  // is single-assignment, so the lifter (to-ir) rebinds the name SSA-style.
+  if (
+    ts.isExpressionStatement(s) &&
+    ts.isBinaryExpression(s.expression) &&
+    ts.isIdentifier(s.expression.left)
+  ) {
+    const be = s.expression;
+    const name = be.left.getText(sf);
+    if (be.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      return { t: "assign", name, expr: liftExpr(be.right, sf) };
+    }
+    const aug = AUG_OP[be.operatorToken.kind];
+    if (aug) {
+      return { t: "assign", name, expr: { t: "bin", op: aug, a: { t: "var", name }, b: liftExpr(be.right, sf) } };
+    }
   }
   if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
     const call = s.expression;
@@ -146,10 +166,40 @@ const BIN_OP: Partial<Record<ts.SyntaxKind, Op>> = {
   [ts.SyntaxKind.BarBarToken]: "or",
 };
 
+/** Augmented-assignment operators (`+=`, `-=`, …) → the underlying binary op. */
+const AUG_OP: Partial<Record<ts.SyntaxKind, Op>> = {
+  [ts.SyntaxKind.PlusEqualsToken]: "add",
+  [ts.SyntaxKind.MinusEqualsToken]: "sub",
+  [ts.SyntaxKind.AsteriskEqualsToken]: "mul",
+  [ts.SyntaxKind.SlashEqualsToken]: "div",
+  [ts.SyntaxKind.PercentEqualsToken]: "mod",
+};
+
+/**
+ * A template literal lowers to a left-folded `concat` chain over its string
+ * parts and interpolations. The IR has no string-interpolation node, but
+ * `concat` is exactly the string-join effect it needs — each backend emits it
+ * as `+`. Empty fixed parts (a leading `${...}` or adjacent interpolations) are
+ * dropped so the chain carries only the pieces that produce text.
+ */
+function liftTemplate(e: ts.TemplateExpression, sf: ts.SourceFile): Expr {
+  const parts: Expr[] = [];
+  if (e.head.text !== "") parts.push({ t: "lit", value: e.head.text });
+  for (const span of e.templateSpans) {
+    parts.push(liftExpr(span.expression, sf));
+    if (span.literal.text !== "") parts.push({ t: "lit", value: span.literal.text });
+  }
+  if (parts.length === 0) return { t: "lit", value: "" };
+  return parts.reduce((a, b) => ({ t: "bin", op: "concat", a, b }));
+}
+
 function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
   if (ts.isParenthesizedExpression(e)) return liftExpr(e.expression, sf);
   if (ts.isNumericLiteral(e)) return { t: "lit", value: Number(e.text) };
   if (ts.isStringLiteral(e)) return { t: "lit", value: e.text };
+  // A template with no interpolation is just a string literal.
+  if (ts.isNoSubstitutionTemplateLiteral(e)) return { t: "lit", value: e.text };
+  if (ts.isTemplateExpression(e)) return liftTemplate(e, sf);
   if (e.kind === ts.SyntaxKind.TrueKeyword) return { t: "lit", value: true };
   if (e.kind === ts.SyntaxKind.FalseKeyword) return { t: "lit", value: false };
   if (e.kind === ts.SyntaxKind.NullKeyword) return { t: "lit", value: null };
@@ -167,6 +217,12 @@ function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
     const op = BIN_OP[e.operatorToken.kind];
     if (!op) throw new Error(`lift(ts): unsupported operator "${ts.SyntaxKind[e.operatorToken.kind]}"`);
     return { t: "bin", op, a: liftExpr(e.left, sf), b: liftExpr(e.right, sf) };
+  }
+  if (ts.isConditionalExpression(e)) {
+    return { t: "cond", cond: liftExpr(e.condition, sf), then: liftExpr(e.whenTrue, sf), else: liftExpr(e.whenFalse, sf) };
+  }
+  if (ts.isArrayLiteralExpression(e)) {
+    return { t: "array", elems: e.elements.map((el) => liftExpr(el, sf)) };
   }
   if (ts.isCallExpression(e)) {
     return { t: "call", name: e.expression.getText(sf), args: e.arguments.map((a) => liftExpr(a, sf)) };

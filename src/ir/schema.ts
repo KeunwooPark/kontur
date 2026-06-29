@@ -63,8 +63,22 @@ export const Node = z.discriminatedUnion("kind", [
   z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string() }).strict(),
+  // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
+  // The counted `loop` carries from/to/index; a `while` carries only a predicate.
+  z.object({ ...nodeBase, kind: z.literal("while"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
+  // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in
+  // "cond", "then", "else"; one data out. This is the data-wire analogue of the
+  // control-wire `branch` — Blueprints' "Select" node.
+  z.object({ ...nodeBase, kind: z.literal("select"), label: z.string() }).strict(),
+  // A pure list constructor. Pins: data-in "0".."n-1" (the elements); one data out.
+  z.object({ ...nodeBase, kind: z.literal("array"), label: z.string() }).strict(),
+  // A pure list comprehension over an inclusive counted range. Pins: data-in
+  // "from","to" (range bounds) and "elem" (the element expression, which may read
+  // the bound index); data-out "index" (the bound variable) and one default out
+  // (the resulting list). `label` is the bound variable name.
+  z.object({ ...nodeBase, kind: z.literal("comprehension"), label: z.string() }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
   z.object({ ...nodeBase, kind: z.literal("module"), ref: z.string().min(1) }).strict(),
   // --- class support (a class is a module of kind "class") ------------------

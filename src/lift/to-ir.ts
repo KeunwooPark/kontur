@@ -70,6 +70,7 @@ function lowerClass(
 }
 
 function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>): Module {
+  fn = normalizeReturns(fn);
   assertSupported(fn);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
@@ -155,6 +156,20 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       lowerBlock(ctx, s.body, `${id}:body`);
       return `${id}:done`;
     }
+    case "while": {
+      const id = newNode(ctx, { kind: "while", label: "while" });
+      ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      lowerBlock(ctx, s.body, `${id}:body`);
+      return `${id}:done`;
+    }
+    case "assign": {
+      // Single-assignment dataflow: a reassignment is not a node — it rebinds the
+      // name to a fresh data source. The RHS is lowered against the CURRENT
+      // binding first, so `n = n + 1` reads the old `n` before `n` is rebound.
+      ctx.varMap.set(s.name, lowerExpr(ctx, s.expr));
+      return prev;
+    }
     case "return": {
       ctx.returnSource = lowerExpr(ctx, s.expr);
       return prev;
@@ -210,6 +225,28 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       ctx.wires.push([lowerExpr(ctx, e.x), `${id}:x`, "data"]);
       return id;
     }
+    case "cond": {
+      const id = newNode(ctx, { kind: "select", label: "select" });
+      ctx.wires.push([lowerExpr(ctx, e.cond), `${id}:cond`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, e.then), `${id}:then`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, e.else), `${id}:else`, "data"]);
+      return id;
+    }
+    case "array": {
+      const id = newNode(ctx, { kind: "array", label: "array" });
+      e.elems.forEach((el, i) => ctx.wires.push([lowerExpr(ctx, el), `${id}:${i}`, "data"]));
+      return id;
+    }
+    case "comprehension": {
+      const id = newNode(ctx, { kind: "comprehension", label: e.varName });
+      ctx.wires.push([lowerExpr(ctx, e.from), `${id}:from`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, e.to), `${id}:to`, "data"]);
+      // Bind the iteration variable BEFORE lowering the element expression, which
+      // reads it — exactly like a counted loop's index.
+      ctx.varMap.set(e.varName, `${id}:index`);
+      ctx.wires.push([lowerExpr(ctx, e.elem), `${id}:elem`, "data"]);
+      return id;
+    }
     case "call": {
       // A nested call in value position → a pure (un-sequenced) stub function.
       const id = newNode(ctx, { kind: "function", label: e.name });
@@ -220,10 +257,44 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
 }
 
 /**
+ * Rewrite a returning if/else into a single tail `return` of a `select` value,
+ * so branch-arm returns become a representable data multiplexer rather than
+ * multiple control exits. Only the example-level shape is converted: a *tail*
+ * if/else whose every arm is itself a lone `return` (or a nested returning
+ * if/else). Anything richer is left untouched for `assertSupported` to judge.
+ *
+ *   if (c) return A; else return B;   ⟶   return (c ? A : B);
+ */
+function normalizeReturns(fn: Fn): Fn {
+  const last = fn.body[fn.body.length - 1];
+  if (!last || last.t !== "if") return fn;
+  const expr = ifReturnToExpr(last);
+  if (!expr) return fn;
+  return { ...fn, body: [...fn.body.slice(0, -1), { t: "return", expr }] };
+}
+
+function ifReturnToExpr(s: Stmt): Expr | null {
+  if (s.t !== "if") return null;
+  const then = blockReturnToExpr(s.then);
+  const els = blockReturnToExpr(s.else);
+  return then && els ? { t: "cond", cond: s.cond, then, else: els } : null;
+}
+
+/** A block usable as a `select` arm: a single `return E`, or a nested returning if. */
+function blockReturnToExpr(block: Stmt[]): Expr | null {
+  if (block.length !== 1) return null;
+  const only = block[0]!;
+  if (only.t === "return") return only.expr;
+  if (only.t === "if") return ifReturnToExpr(only);
+  return null;
+}
+
+/**
  * Reject code outside what the transpiler can faithfully represent. The IR
  * model has one boundary out-port fed by one wire, so a function may have at
  * most one `return`, and it must be the final top-level statement (no early or
- * per-branch returns). Better to refuse than to lift a graph that lies.
+ * per-branch returns — those are normalized to a `select` above when possible).
+ * Better to refuse than to lift a graph that lies.
  */
 function assertSupported(fn: Fn): void {
   const fail = (): never => {
@@ -236,12 +307,14 @@ function assertSupported(fn: Fn): void {
     if (s.t === "return") fail();
     if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
     if (s.t === "for") s.body.forEach(forbidNested);
+    if (s.t === "while") s.body.forEach(forbidNested);
   };
   fn.body.forEach((s, i) => {
     const isTail = i === fn.body.length - 1;
     if (s.t === "return") { if (!isTail) fail(); }
     else if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
     else if (s.t === "for") s.body.forEach(forbidNested);
+    else if (s.t === "while") s.body.forEach(forbidNested);
   });
 }
 

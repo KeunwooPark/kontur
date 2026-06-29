@@ -162,6 +162,16 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "while") {
+        stmts.push({
+          t: "while",
+          cond: this.resolveInput(node.id, "cond"),
+          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+        });
+        cur = this.controlTargetFrom(`${node.id}:done`);
+        continue;
+      }
+
       if (node.kind === "stateSet") {
         stmts.push({ t: "stateSet", attr: node.attr, value: this.resolveInput(node.id, "value") });
         cur = this.controlNext(node.id);
@@ -197,6 +207,28 @@ class ModuleCompiler {
         return { t: "lit", value: node.value };
       case "stateGet":
         return { t: "stateGet", attr: node.attr };
+      case "select":
+        return {
+          t: "cond",
+          cond: this.resolveInput(node.id, "cond"),
+          then: this.resolveInput(node.id, "then"),
+          else: this.resolveInput(node.id, "else"),
+        };
+      case "array": {
+        const elems: Expr[] = [];
+        for (let i = 0; this.dataSrc.has(`${node.id}:${i}`); i++) {
+          elems.push(this.resolveInput(node.id, String(i)));
+        }
+        return { t: "array", elems };
+      }
+      case "comprehension":
+        return {
+          t: "comprehension",
+          varName: identifier(node.label) || node.id,
+          from: this.resolveInput(node.id, "from"),
+          to: this.resolveInput(node.id, "to"),
+          elem: this.resolveInput(node.id, "elem"),
+        };
       case "function": {
         if (node.op && BINARY_OPS.has(node.op)) {
           return { t: "bin", op: node.op, a: this.resolveInput(node.id, "a"), b: this.resolveInput(node.id, "b") };
@@ -251,6 +283,10 @@ class ModuleCompiler {
     const src = this.node(ep.nodeId);
     if (src.kind === "loop" && ep.port === "index") {
       return { t: "var", name: this.loopVar.get(src.id) ?? src.id };
+    }
+    // A comprehension's bound variable, read by its element expression.
+    if (src.kind === "comprehension" && ep.port === "index") {
+      return { t: "var", name: identifier(src.label) || src.id };
     }
     if (this.hasControlIn.has(src.id)) {
       // Sequenced → bound to a local variable earlier in the flow.
