@@ -1,0 +1,80 @@
+{
+  "features": ["fizzbuzz"],
+  "modules": {
+    "fizzbuzz": {
+      "title": "FizzBuzz",
+      "ports": [
+        { "name": "exec", "type": "exec", "io": "in", "wire": "control" },
+        { "name": "n", "type": "int", "io": "in", "wire": "data" },
+        { "name": "done", "type": "exec", "io": "out", "wire": "control" }
+      ],
+      "interior": {
+        "nodes": [
+          { "id": "c1", "kind": "const", "label": "1", "value": 1 },
+          { "id": "c0", "kind": "const", "label": "0", "value": 0 },
+          { "id": "c3", "kind": "const", "label": "3", "value": 3 },
+          { "id": "c5", "kind": "const", "label": "5", "value": 5 },
+          { "id": "c15", "kind": "const", "label": "15", "value": 15 },
+          { "id": "sFB", "kind": "const", "label": "FizzBuzz", "value": "FizzBuzz" },
+          { "id": "sF", "kind": "const", "label": "Fizz", "value": "Fizz" },
+          { "id": "sB", "kind": "const", "label": "Buzz", "value": "Buzz" },
+
+          { "id": "L", "kind": "loop", "label": "i" },
+
+          { "id": "m15", "kind": "function", "label": "i mod 15", "op": "mod" },
+          { "id": "e15", "kind": "function", "label": "is zero", "op": "eq" },
+          { "id": "m3", "kind": "function", "label": "i mod 3", "op": "mod" },
+          { "id": "e3", "kind": "function", "label": "is zero", "op": "eq" },
+          { "id": "m5", "kind": "function", "label": "i mod 5", "op": "mod" },
+          { "id": "e5", "kind": "function", "label": "is zero", "op": "eq" },
+
+          { "id": "bFB", "kind": "branch", "label": "divisible by 15?" },
+          { "id": "b3", "kind": "branch", "label": "divisible by 3?" },
+          { "id": "b5", "kind": "branch", "label": "divisible by 5?" },
+
+          { "id": "pFB", "kind": "effect", "label": "print FizzBuzz", "io": "out", "op": "print" },
+          { "id": "pF", "kind": "effect", "label": "print Fizz", "io": "out", "op": "print" },
+          { "id": "pB", "kind": "effect", "label": "print Buzz", "io": "out", "op": "print" },
+          { "id": "pN", "kind": "effect", "label": "print number", "io": "out", "op": "print" }
+        ],
+        "wires": [
+          ["P:exec", "L", "control"],
+          ["L:body", "bFB", "control"],
+          ["bFB:then", "pFB", "control"],
+          ["bFB:else", "b3", "control"],
+          ["b3:then", "pF", "control"],
+          ["b3:else", "b5", "control"],
+          ["b5:then", "pB", "control"],
+          ["b5:else", "pN", "control"],
+          ["L:done", "P:done", "control"],
+
+          ["c1", "L:from", "data"],
+          ["P:n", "L:to", "data"],
+
+          ["L:index", "m15:a", "data"],
+          ["c15", "m15:b", "data"],
+          ["m15", "e15:a", "data"],
+          ["c0", "e15:b", "data"],
+          ["e15", "bFB:cond", "data"],
+
+          ["L:index", "m3:a", "data"],
+          ["c3", "m3:b", "data"],
+          ["m3", "e3:a", "data"],
+          ["c0", "e3:b", "data"],
+          ["e3", "b3:cond", "data"],
+
+          ["L:index", "m5:a", "data"],
+          ["c5", "m5:b", "data"],
+          ["m5", "e5:a", "data"],
+          ["c0", "e5:b", "data"],
+          ["e5", "b5:cond", "data"],
+
+          ["sFB", "pFB:value", "data"],
+          ["sF", "pF:value", "data"],
+          ["sB", "pB:value", "data"],
+          ["L:index", "pN:value", "data"]
+        ]
+      }
+    }
+  }
+}

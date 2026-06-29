@@ -22,6 +22,22 @@ export const PortIO = z.enum(["in", "out"]);
 export const WireKind = z.enum(["data", "control"]);
 
 /**
+ * Abstract operator vocabulary for `function`/`effect` nodes. Deliberately
+ * language-agnostic — each op maps to syntax in every backend (e.g. `mod` →
+ * JS `%`, Py `%`). A node with no `op` is an opaque named step (stub call).
+ *
+ * Pin conventions (the names wires use on the `to` endpoint):
+ *   binary ops → "a", "b"      unary `not` → "x"      `print` → "value"
+ */
+export const Op = z.enum([
+  "add", "sub", "mul", "div", "mod",
+  "eq", "ne", "lt", "le", "gt", "ge",
+  "and", "or", "not",
+  "concat",
+  "print",
+]);
+
+/**
  * A port is one endpoint of a module's PUBLIC CONTRACT. The set of a module's
  * ports must correspond exactly to the unconnected boundary of its interior
  * (the port-boundary invariant — checked in validate.ts).
@@ -44,10 +60,10 @@ const nodeBase = { id: z.string().min(1) };
  * (a link). Every node has a unique-within-its-module `id` that wires reference.
  */
 export const Node = z.discriminatedUnion("kind", [
-  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string() }).strict(),
+  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string() }).strict(),
-  z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO }).strict(),
+  z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
   z.object({ ...nodeBase, kind: z.literal("module"), ref: z.string().min(1) }).strict(),
@@ -89,6 +105,7 @@ export const System = z
 
 export type PortIO = z.infer<typeof PortIO>;
 export type WireKind = z.infer<typeof WireKind>;
+export type Op = z.infer<typeof Op>;
 export type Port = z.infer<typeof Port>;
 export type Node = z.infer<typeof Node>;
 export type Wire = z.infer<typeof Wire>;
