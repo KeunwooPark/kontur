@@ -49,7 +49,10 @@ export function compile(system: System): Program {
     }
     // else: a method module — emitted within its class above.
   }
-  return { functions, classes };
+  // Imports are reproduced verbatim from the System's fidelity record; the
+  // emitters render the `import` lines (prov is editor-only, dropped here).
+  const imports = (system.imports ?? []).map((i) => ({ source: i.source, bindings: i.bindings }));
+  return { functions, classes, imports };
 }
 
 function compileClass(
@@ -281,7 +284,8 @@ class ModuleCompiler {
         if (node.op === "not") {
           return { t: "un", op: node.op, x: this.resolveInput(node.id, "x") };
         }
-        return { t: "call", name: node.label, args: this.stubArgs(node.id) };
+        // An external (package) call carries its source; emit its API name verbatim.
+        return { t: "call", name: node.label, args: this.stubArgs(node.id), ...(node.source ? { external: true } : {}) };
       }
       default:
         throw new Error(`node "${node.id}" (kind ${node.kind}) is not an inlinable value`);

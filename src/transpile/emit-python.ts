@@ -1,6 +1,6 @@
 /** Render the neutral AST as Python 3. */
 import type { Op } from "../ir/schema.js";
-import type { Class, Expr, Fn, Program, Stmt } from "./ast.js";
+import type { Class, Expr, Fn, Import, Program, Stmt } from "./ast.js";
 import { pascal, snake } from "./naming.js";
 
 const BIN: Partial<Record<Op, string>> = {
@@ -41,8 +41,28 @@ function expr(e: Expr): string {
       const v = snake(e.varName);
       return `[${expr(e.elem)} for ${v} in range(${expr(e.from)}, ${expr(e.to)} + 1)]`;
     }
-    case "call": return `${snake(e.name)}(${e.args.map(expr).join(", ")})`;
+    // A package call keeps its library API name verbatim; a local stub is cased.
+    case "call": return `${e.external ? e.name : snake(e.name)}(${e.args.map(expr).join(", ")})`;
   }
+}
+
+/** Render one import statement. Named bindings → `from m import …`; namespace
+ *  bindings → `import m [as x]`. A single source import never mixes the two. */
+function importLine(imp: Import): string {
+  if (imp.bindings.length === 0) return `import ${imp.source}`;
+  const lines: string[] = [];
+  const named = imp.bindings.filter((b) => b.kind === "named");
+  if (named.length > 0) {
+    const items = named.map((b) => (b.imported === b.local ? b.imported : `${b.imported} as ${b.local}`));
+    lines.push(`from ${imp.source} import ${items.join(", ")}`);
+  }
+  for (const b of imp.bindings) {
+    // `default` has no Python form; emit it as an aliased module import (best effort).
+    if (b.kind === "namespace" || b.kind === "default") {
+      lines.push(b.local === imp.source ? `import ${imp.source}` : `import ${imp.source} as ${b.local}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function stmt(s: Stmt, indent: string): string[] {
@@ -135,5 +155,7 @@ function cls(c: Class): string {
 
 export function emitPython(program: Program): string {
   const chunks = [...program.classes.map(cls), ...program.functions.map((f) => fn(f))];
-  return chunks.join("\n\n\n") + "\n";
+  const body = chunks.join("\n\n\n") + "\n";
+  const imports = (program.imports ?? []).map(importLine);
+  return imports.length > 0 ? imports.join("\n") + "\n\n\n" + body : body;
 }

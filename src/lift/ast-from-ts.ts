@@ -3,18 +3,54 @@
  * TypeScript compiler API. Handles the subset our emitter produces.
  */
 import * as ts from "typescript";
-import type { Class, Expr, Field, Fn, Param, Program, Stmt } from "../transpile/ast.js";
+import type { Class, Expr, Field, Fn, Import, ImportBinding, Param, Program, Stmt } from "../transpile/ast.js";
 import type { Op } from "../ir/schema.js";
 
 export function parseTypeScript(source: string): Program {
   const sf = ts.createSourceFile("input.ts", source, ts.ScriptTarget.Latest, /*setParentNodes*/ true);
   const functions: Fn[] = [];
   const classes: Class[] = [];
+  const imports: Import[] = [];
   sf.forEachChild((node) => {
     if (ts.isFunctionDeclaration(node) && node.name && node.body) functions.push(liftFn(node, sf));
     else if (ts.isClassDeclaration(node) && node.name) classes.push(liftClass(node, sf));
+    else if (ts.isImportDeclaration(node)) imports.push(liftImport(node));
+    // `import x = require(...)` is a distinct, non-ESM form with no IR model.
+    else if (ts.isImportEqualsDeclaration(node)) {
+      throw new Error(`lift(ts): unsupported "import = require()" (only ES module imports are modelled)`);
+    }
+    // Other top-level nodes (the EOF token, etc.) are ignored. An `export … from`
+    // re-export is an ExportDeclaration, not handled here.
   });
-  return { functions, classes };
+  return { functions, classes, imports };
+}
+
+/**
+ * Lift an ES module import declaration into the neutral `Import`. Captures the
+ * value bindings verbatim (default / namespace / named, with aliases) so the
+ * transpiler can reproduce the line. Type-only imports carry no runtime meaning
+ * and have no IR model, so they are refused loudly rather than silently dropped.
+ */
+function liftImport(node: ts.ImportDeclaration): Import {
+  const source = (node.moduleSpecifier as ts.StringLiteral).text;
+  const clause = node.importClause;
+  // Bare side-effect import: `import "x";`.
+  if (!clause) return { source, bindings: [] };
+  if (clause.isTypeOnly) throw new Error(`lift(ts): unsupported type-only import from "${source}"`);
+  const bindings: ImportBinding[] = [];
+  if (clause.name) bindings.push({ kind: "default", local: clause.name.text });
+  const nb = clause.namedBindings;
+  if (nb) {
+    if (ts.isNamespaceImport(nb)) {
+      bindings.push({ kind: "namespace", local: nb.name.text });
+    } else {
+      for (const el of nb.elements) {
+        if (el.isTypeOnly) throw new Error(`lift(ts): unsupported type-only import binding "${el.name.text}" from "${source}"`);
+        bindings.push({ kind: "named", imported: (el.propertyName ?? el.name).text, local: el.name.text });
+      }
+    }
+  }
+  return { source, bindings };
 }
 
 function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {

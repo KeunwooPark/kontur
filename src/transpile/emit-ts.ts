@@ -1,6 +1,6 @@
 /** Render the neutral AST as TypeScript. */
 import type { Op } from "../ir/schema.js";
-import type { Class, Expr, Fn, Program, Stmt } from "./ast.js";
+import type { Class, Expr, Fn, Import, Program, Stmt } from "./ast.js";
 import { camel, pascal } from "./naming.js";
 
 const BIN: Partial<Record<Op, string>> = {
@@ -45,8 +45,27 @@ function expr(e: Expr): string {
       const v = camel(e.varName);
       return `Array.from({ length: ${expr(e.to)} - ${expr(e.from)} + 1 }, (_, ${v}) => ${expr(e.elem)})`;
     }
-    case "call": return `${camel(e.name)}(${e.args.map(expr).join(", ")})`;
+    // A package call keeps its library API name verbatim (no re-casing, dotted
+    // member access preserved); a local helper/stub is cased like any identifier.
+    case "call": return `${e.external ? e.name : camel(e.name)}(${e.args.map(expr).join(", ")})`;
   }
+}
+
+/** Render one import statement. Bindings come from a single source import, so the
+ *  default / namespace / named clauses present are a valid TS combination. */
+function importLine(imp: Import): string {
+  if (imp.bindings.length === 0) return `import "${imp.source}";`;
+  const clauses: string[] = [];
+  const def = imp.bindings.find((b) => b.kind === "default");
+  const ns = imp.bindings.find((b) => b.kind === "namespace");
+  const named = imp.bindings.filter((b) => b.kind === "named");
+  if (def) clauses.push(def.local);
+  if (ns) clauses.push(`* as ${ns.local}`);
+  if (named.length > 0) {
+    const items = named.map((b) => (b.imported === b.local ? b.local : `${b.imported} as ${b.local}`));
+    clauses.push(`{ ${items.join(", ")} }`);
+  }
+  return `import ${clauses.join(", ")} from "${imp.source}";`;
 }
 
 function stmt(s: Stmt, indent: string): string[] {
@@ -142,5 +161,7 @@ function cls(c: Class): string {
 
 export function emitTypeScript(program: Program): string {
   const chunks = [...program.classes.map(cls), ...program.functions.map((f) => fn(f))];
-  return chunks.join("\n\n") + "\n";
+  const body = chunks.join("\n\n") + "\n";
+  const imports = (program.imports ?? []).map(importLine);
+  return imports.length > 0 ? imports.join("\n") + "\n\n" + body : body;
 }
