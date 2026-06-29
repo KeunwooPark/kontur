@@ -164,6 +164,18 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       lowerBlock(ctx, s.body, `${id}:body`);
       return `${id}:done`;
     }
+    case "foreach": {
+      // The collection-driven loop sibling: the iterable flows in on `iter`, the
+      // bound element out on `item`. Like a counted loop's index, `item` is bound
+      // BEFORE lowering the body that reads it; the iterable is evaluated in the
+      // enclosing scope, so it is lowered first.
+      const id = newNode(ctx, { kind: "foreach", label: s.varName });
+      ctx.wires.push([lowerExpr(ctx, s.iter), `${id}:iter`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      ctx.varMap.set(s.varName, `${id}:item`);
+      lowerBlock(ctx, s.body, `${id}:body`);
+      return `${id}:done`;
+    }
     case "try": {
       // Protected block + handler, rejoining at `done`. The catch binding (if
       // any) is a data-out `error`, bound BEFORE lowering the handler that reads
@@ -188,6 +200,14 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // exactly like a branch arm. Returning null stops the enclosing block.
       const id = newNode(ctx, { kind: "throw", label: "throw" });
       ctx.wires.push([lowerExpr(ctx, s.arg), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return null;
+    }
+    case "rethrow": {
+      // Terminal too — control escapes carrying the re-raised value. The only
+      // difference from `throw` is that the value flows on UNWRAPPED.
+      const id = newNode(ctx, { kind: "rethrow", label: "rethrow" });
+      ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return null;
     }
@@ -339,6 +359,7 @@ function foldNested(s: Stmt): Stmt {
     case "if": return { ...s, then: foldGuards(s.then), else: foldGuards(s.else) };
     case "for": return { ...s, body: foldGuards(s.body) };
     case "while": return { ...s, body: foldGuards(s.body) };
+    case "foreach": return { ...s, body: foldGuards(s.body) };
     case "try": return { ...s, body: foldGuards(s.body), handler: foldGuards(s.handler) };
     default: return s;
   }
@@ -348,7 +369,7 @@ function foldNested(s: Stmt): Stmt {
 function isTerminal(stmts: Stmt[]): boolean {
   const last = stmts[stmts.length - 1];
   if (!last) return false; // empty block falls through
-  if (last.t === "throw") return true;
+  if (last.t === "throw" || last.t === "rethrow") return true;
   // A branch escapes only if BOTH arms do; an empty/missing else falls through.
   if (last.t === "if") return isTerminal(last.then) && isTerminal(last.else);
   return false;
@@ -389,6 +410,7 @@ function assertSupported(fn: Fn): void {
     if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
     if (s.t === "for") s.body.forEach(forbidNested);
     if (s.t === "while") s.body.forEach(forbidNested);
+    if (s.t === "foreach") s.body.forEach(forbidNested);
     if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   };
   fn.body.forEach((s, i) => {
@@ -397,6 +419,7 @@ function assertSupported(fn: Fn): void {
     else if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
     else if (s.t === "for") s.body.forEach(forbidNested);
     else if (s.t === "while") s.body.forEach(forbidNested);
+    else if (s.t === "foreach") s.body.forEach(forbidNested);
     else if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   });
 }

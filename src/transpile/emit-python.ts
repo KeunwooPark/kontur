@@ -61,6 +61,9 @@ function stmt(s: Stmt, indent: string): string[] {
       // The IR throw is catch-all (no exception type) → a bare `Exception`,
       // mirroring how the `try` side emits `except Exception`.
       return [`${indent}raise Exception(${expr(s.arg)})`];
+    case "rethrow":
+      // Re-raise an existing value unchanged: `raise e` (not wrapped).
+      return [`${indent}raise ${expr(s.value)}`];
     case "return":
       return [`${indent}return ${expr(s.expr)}`];
     case "returnObject":
@@ -83,6 +86,11 @@ function stmt(s: Stmt, indent: string): string[] {
     }
     case "while": {
       const out = [`${indent}while ${expr(s.cond)}:`];
+      for (const b of s.body) out.push(...stmt(b, indent + "    "));
+      return out;
+    }
+    case "foreach": {
+      const out = [`${indent}for ${snake(s.varName)} in ${expr(s.iter)}:`];
       for (const b of s.body) out.push(...stmt(b, indent + "    "));
       return out;
     }

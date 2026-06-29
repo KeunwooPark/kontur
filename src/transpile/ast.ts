@@ -37,6 +37,8 @@ export type Stmt =
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }
   /** Condition-driven loop: `while cond { … }`. */
   | { t: "while"; cond: Expr; body: Stmt[] }
+  /** Collection-driven loop: `for varName of iter { … }` / `for varName in iter:`. */
+  | { t: "foreach"; varName: string; iter: Expr; body: Stmt[] }
   /**
    * Protected execution: `try { body } catch (catchParam) { handler }`. The
    * IR has catch-all semantics (no exception type); `catchParam` is absent when
@@ -50,6 +52,13 @@ export type Stmt =
    * error constructor (`throw new Error(arg)` / `raise Exception(arg)`).
    */
   | { t: "throw"; arg: Expr }
+  /**
+   * Re-raise an existing exception value unchanged (`throw e` / `raise e`).
+   * Terminal, like `throw`, but the value is passed on AS-IS — no error
+   * constructor wraps it. `value` is the exception being re-raised (typically the
+   * enclosing catch binding).
+   */
+  | { t: "rethrow"; value: Expr }
   | { t: "return"; expr: Expr }
   /** Return several named values (multi-output module). */
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] };

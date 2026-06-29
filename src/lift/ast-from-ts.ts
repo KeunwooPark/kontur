@@ -108,11 +108,27 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
   if (ts.isWhileStatement(s)) {
     return { t: "while", cond: liftExpr(s.expression, sf), body: block(s.statement, sf) };
   }
+  if (ts.isForOfStatement(s)) {
+    // Iterate a collection: `for (const item of iter) { … }`. The IR models this
+    // as a `foreach` node — the iterable on data-in, the element bound for the
+    // body. Only a single `const`/`let` identifier binding is modelled; a
+    // destructuring pattern or `await` is non-trivial and refused, not guessed.
+    if (s.awaitModifier) throw new Error(`lift(ts): unsupported "for await ... of"`);
+    if (!ts.isVariableDeclarationList(s.initializer) || s.initializer.declarations.length !== 1) {
+      throw new Error(`lift(ts): unsupported for-of initializer (expected a single binding)`);
+    }
+    const decl = s.initializer.declarations[0]!;
+    if (!ts.isIdentifier(decl.name)) {
+      throw new Error(`lift(ts): unsupported for-of binding (only a single identifier, not a pattern)`);
+    }
+    return { t: "foreach", varName: decl.name.text, iter: liftExpr(s.expression, sf), body: block(s.statement, sf) };
+  }
   if (ts.isThrowStatement(s)) {
-    // The IR models a single catch-all error carrying a message — the raising
-    // counterpart of the catch-all `try`. Only `throw new Error(<message>)` maps;
-    // re-raising a value (`throw e`) or a typed/custom error is non-local control
-    // flow we cannot faithfully reproduce, so refuse it rather than approximate.
+    // Two raising shapes are modelled, mirroring the two IR nodes:
+    //   `throw new Error(msg)` → `throw`  (construct a fresh error from a message)
+    //   `throw e`              → `rethrow` (re-raise an existing value unchanged)
+    // A typed/custom error (`throw new TypeError(…)`), a thrown literal, or any
+    // other expression is beyond the catch-all model, so it is refused, not faked.
     const e = s.expression;
     if (
       ts.isNewExpression(e) &&
@@ -122,7 +138,10 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
     ) {
       return { t: "throw", arg: liftExpr(e.arguments[0]!, sf) };
     }
-    throw new Error(`lift(ts): unsupported throw (only \`throw new Error(message)\` is modelled)`);
+    if (ts.isIdentifier(e)) {
+      return { t: "rethrow", value: { t: "var", name: e.text } };
+    }
+    throw new Error(`lift(ts): unsupported throw (only \`throw new Error(message)\` or re-raising a value \`throw e\` is modelled)`);
   }
   if (ts.isTryStatement(s)) {
     // The IR models a single catch-all handler. `finally` is non-local control

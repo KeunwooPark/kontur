@@ -66,6 +66,11 @@ export const Node = z.discriminatedUnion("kind", [
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
   // The counted `loop` carries from/to/index; a `while` carries only a predicate.
   z.object({ ...nodeBase, kind: z.literal("while"), label: z.string() }).strict(),
+  // A collection-driven loop (for-each). Pins: data-in "iter" (the iterable);
+  // data-out "item" (the bound element, read by the body); control-out "body" and
+  // "done". The third loop sibling: `loop` counts a range, `while` tests a
+  // predicate, `foreach` walks the elements of a value. `label` is the item var.
+  z.object({ ...nodeBase, kind: z.literal("foreach"), label: z.string() }).strict(),
   // Protected execution (try/catch). Control-in enters the protected block;
   // control-out "body" runs it, "catch" runs the handler if it raises, and "done"
   // is the continuation after either path. Data-out "error" is the caught value
@@ -80,6 +85,13 @@ export const Node = z.discriminatedUnion("kind", [
   // models only "raise an error carrying a message" (TS `throw new Error(msg)` /
   // Py `raise Exception(msg)`), never an exception type. `label` is always "throw".
   z.object({ ...nodeBase, kind: z.literal("throw"), label: z.string() }).strict(),
+  // Re-raise an EXISTING exception value (a bare rethrow). Like `throw`, it is
+  // TERMINAL — control-in, one data-in "value", no control-out. The difference is
+  // semantic and deliberate: `throw` constructs a fresh error from a message and
+  // WRAPS it (`new Error(msg)` / `Exception(msg)`); `rethrow` passes its value on
+  // UNCHANGED (`throw e` / `raise e`). The catch-all IR carries the value as-is —
+  // typically a `try` node's caught-error binding wired straight into "value".
+  z.object({ ...nodeBase, kind: z.literal("rethrow"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in

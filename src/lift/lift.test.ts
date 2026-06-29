@@ -190,6 +190,12 @@ describe("lift: control & collection constructs round-trip (TS)", () => {
       expectA: "console.log([1, 2, 3]);",
     },
     {
+      // for-of over a collection → a `foreach` node; the element binds out as `item`.
+      name: "for-of → foreach node",
+      src: "export function printAll(items: number[]): void {\n  for (const item of items) {\n    console.log(item);\n  }\n}\n",
+      expectA: "for (const item of items) {",
+    },
+    {
       // try/catch → a `try` node; the caught binding flows out as `error`.
       name: "try/catch → try node",
       src: "export function risky(n: number): void {\n  try {\n    console.log(n);\n  } catch (e) {\n    console.log(e);\n  }\n}\n",
@@ -201,6 +207,13 @@ describe("lift: control & collection constructs round-trip (TS)", () => {
       name: "throw guard → throw node",
       src: 'export function risky(n: number): void {\n  if ((n < 0)) {\n    throw new Error("negative");\n  }\n  console.log(n);\n}\n',
       expectA: 'throw new Error("negative");',
+    },
+    {
+      // Re-raising the caught binding → a terminal `rethrow` node; the value is
+      // passed on UNWRAPPED (`throw e`, not `throw new Error(e)`).
+      name: "rethrow (throw e) → rethrow node",
+      src: "export function risky(n: number): void {\n  try {\n    console.log(n);\n  } catch (e) {\n    throw e;\n  }\n}\n",
+      expectA: "    throw e;",
     },
   ];
 
@@ -228,6 +241,21 @@ describe.skipIf(!hasPython())("lift: Python list comprehension", () => {
     expect(codeA).toContain("[(i * i) for i in range(0, n + 1)]");
     const codeB = transpile(liftPython(codeA), "python");
     expect(codeB).toBe(codeA);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: Python for-each (collection loop)", () => {
+  const SRC = "def print_all(items: list) -> None:\n    for item in items:\n        print(item)\n";
+
+  it("lifts a non-range for-in → foreach node and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("for item in items:");
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+    // The same IR cross-compiles to a TS for-of.
+    expect(transpile(sys, "ts")).toContain("for (const item of items) {");
   });
 });
 
@@ -261,15 +289,35 @@ describe.skipIf(!hasPython())("lift: Python raise (throw)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python re-raise (rethrow)", () => {
+  const SRC = "def risky(n: int) -> None:\n    try:\n        print(n)\n    except Exception as e:\n        raise e\n";
+
+  it("lifts `raise e` → rethrow node and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("raise e");
+    expect(codeA).not.toContain("raise Exception(e)"); // re-raised UNWRAPPED
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+    // The same IR cross-compiles to a TS rethrow.
+    expect(transpile(sys, "ts")).toContain("throw e;");
+  });
+
+  it("still refuses a bare `raise` (implicit current exception, no value to wire)", () => {
+    const src = "def risky(n: int) -> None:\n    try:\n        print(n)\n    except Exception:\n        raise\n";
+    expect(() => liftPython(src)).toThrow();
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
-  it("refuses re-raising a caught value (throw e) — only throw new Error(message) is modelled", () => {
+  it("refuses a typed/custom error (throw new TypeError) — the IR carries no exception type", () => {
     const src = [
       "export function risky(n: number): void {",
-      "  try {",
-      "    console.log(n);",
-      "  } catch (e) {",
-      "    throw e;",
+      "  if ((n < 0)) {",
+      '    throw new TypeError("negative");',
       "  }",
+      "  console.log(n);",
       "}",
     ].join("\n");
     expect(() => liftTypeScript(src)).toThrow(/unsupported throw/);
@@ -294,6 +342,17 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
       "}",
     ].join("\n");
     expect(() => liftTypeScript(src)).toThrow(/try\/finally/);
+  });
+
+  it("refuses a for-of with a destructuring binding (foreach binds a single name)", () => {
+    const src = [
+      "export function f(pairs: number[][]): void {",
+      "  for (const [a, b] of pairs) {",
+      "    console.log(a);",
+      "  }",
+      "}",
+    ].join("\n");
+    expect(() => liftTypeScript(src)).toThrow(/for-of binding/);
   });
 
   it("still refuses a return in the middle of a function (non-tail)", () => {

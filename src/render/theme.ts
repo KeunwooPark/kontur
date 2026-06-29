@@ -25,8 +25,10 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "branch", glyph: "◆", label: "branch" },
   { kind: "loop", glyph: "↻", label: "loop" },
   { kind: "while", glyph: "⟲", label: "while loop" },
+  { kind: "foreach", glyph: "∈", label: "for-each loop" },
   { kind: "try", glyph: "⛨", label: "try — protected block" },
   { kind: "throw", glyph: "↯", label: "throw — raise / escape" },
+  { kind: "rethrow", glyph: "⤴", label: "rethrow — re-raise a value" },
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
   { kind: "select", glyph: "⋔", label: "select — value conditional" },
@@ -96,8 +98,10 @@ export const paper: Theme = {
     branch: { fill: "#fbf1da", stroke: "#e69f00" }, // amber
     loop: { fill: "#f7e7f0", stroke: "#cc79a7" }, // reddish purple
     while: { fill: "#e3f1fb", stroke: "#56b4e9" }, // sky blue — the other loop
+    foreach: { fill: "#eef6e2", stroke: "#5a9216" }, // olive green — the collection loop
     try: { fill: "#f7ddd9", stroke: "#b23a2e" }, // brick red — protected/recovery
     throw: { fill: "#fbd9de", stroke: "#c1121f" }, // crimson — the raise/escape sibling of try
+    rethrow: { fill: "#fbe3e0", stroke: "#a01a2e" }, // deep crimson — re-raise an existing value
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
     select: { fill: "#f6ead0", stroke: "#a86b00" }, // deep amber — a data conditional
@@ -132,8 +136,10 @@ export const ink: Theme = {
     branch: { fill: "#3a2a12", stroke: "#e0a13a" },
     loop: { fill: "#2a1c3d", stroke: "#a878e8" },
     while: { fill: "#13283a", stroke: "#56b4e9" },
+    foreach: { fill: "#1c2f12", stroke: "#7fb84a" },
     try: { fill: "#3a1714", stroke: "#e0584a" },
     throw: { fill: "#3a1218", stroke: "#f0556a" },
+    rethrow: { fill: "#3a141c", stroke: "#f07a88" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
     select: { fill: "#33270f", stroke: "#d09a3a" },

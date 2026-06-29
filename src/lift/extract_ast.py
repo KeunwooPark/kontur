@@ -108,15 +108,31 @@ def stmt(s):
             "to": range_stop_to(args[1]),
             "body": [stmt(x) for x in s.body],
         }
+    if isinstance(s, ast.For):
+        # A non-range `for x in iter:` is a collection-driven loop (foreach). Only
+        # a single Name target is modelled; tuple unpacking or a for/else clause is
+        # control flow with no IR node, so refuse it rather than drop it.
+        if not isinstance(s.target, ast.Name):
+            raise SystemExit("lift(py): unsupported for-target (only a single name, not unpacking)")
+        if s.orelse:
+            raise SystemExit("lift(py): unsupported for/else (no IR node for the else clause)")
+        return {
+            "t": "foreach",
+            "varName": s.target.id,
+            "iter": expr(s.iter),
+            "body": [stmt(x) for x in s.body],
+        }
     if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and isinstance(s.value.func, ast.Name):
         if s.value.func.id == "print":
             return {"t": "print", "arg": expr(s.value.args[0])}
         return {"t": "expr", "expr": expr(s.value)}
     if isinstance(s, ast.Raise):
-        # The IR models a single catch-all error carrying a message — the raising
-        # counterpart of the catch-all try. Only `raise Exception(<message>)` maps;
-        # a bare re-raise, `from` cause, or typed/custom exception is non-local
-        # control flow we cannot faithfully reproduce, so refuse rather than guess.
+        # Two raising shapes are modelled, mirroring the two IR nodes:
+        #   raise Exception(msg) -> throw    (construct a fresh error from a message)
+        #   raise e              -> rethrow   (re-raise an existing value unchanged)
+        # A bare `raise` (implicit current exception, no value to wire), a `from`
+        # cause, or a typed/custom exception is beyond the catch-all model, so it is
+        # refused rather than approximated.
         exc = s.exc
         if (
             s.cause is None
@@ -126,7 +142,9 @@ def stmt(s):
             and len(exc.args) == 1
         ):
             return {"t": "throw", "arg": expr(exc.args[0])}
-        raise SystemExit("lift(py): unsupported raise (only `raise Exception(message)` is modelled)")
+        if s.cause is None and isinstance(exc, ast.Name):
+            return {"t": "rethrow", "value": {"t": "var", "name": exc.id}}
+        raise SystemExit("lift(py): unsupported raise (only `raise Exception(message)` or re-raising a value `raise e` is modelled)")
     if isinstance(s, ast.Try):
         # The IR models a single catch-all handler with no exception type. Refuse
         # finally/else and multiple/typed handlers rather than silently drop the
