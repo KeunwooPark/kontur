@@ -4,7 +4,9 @@
  * (TS, Python) renders this to source. Keeping it shared means control-flow
  * analysis happens once and the backends only differ in syntax.
  */
-import type { Op } from "../ir/schema.js";
+import type { Op, SourceSpan } from "../ir/schema.js";
+
+export type { SourceSpan };
 
 export type Expr =
   | { t: "lit"; value: unknown }
@@ -24,7 +26,10 @@ export type Expr =
   /** A call to a generated function: a helper (stub) or another module. */
   | { t: "call"; name: string; args: Expr[] };
 
-export type Stmt =
+// `span` is the optional provenance back to source (set by the lifters, ignored
+// by the emitters). Intersected over the union so every statement kind carries it
+// while still narrowing on `t`.
+export type Stmt = { span?: SourceSpan } & (
   | { t: "let"; name: string; expr: Expr }
   /** Reassign an existing binding: `name = expr` / `name += …`. */
   | { t: "assign"; name: string; expr: Expr }
@@ -62,7 +67,8 @@ export type Stmt =
   | { t: "rethrow"; value: Expr }
   | { t: "return"; expr: Expr }
   /** Return several named values (multi-output module). */
-  | { t: "returnObject"; fields: { name: string; expr: Expr }[] };
+  | { t: "returnObject"; fields: { name: string; expr: Expr }[] }
+);
 
 export interface Param {
   name: string;
@@ -79,6 +85,8 @@ export interface Fn {
   body: Stmt[];
   /** When true, emit as a class method (no `export function`, `self`/`this`). */
   isMethod?: boolean;
+  /** Provenance back to the function/method definition (lifters only). */
+  span?: SourceSpan;
 }
 
 /** A class attribute: a typed, stored cell. */
@@ -93,6 +101,8 @@ export interface Class {
   name: string;
   fields: Field[];
   methods: Fn[];
+  /** Provenance back to the class definition (lifters only). */
+  span?: SourceSpan;
 }
 
 export interface Program {

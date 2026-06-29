@@ -333,6 +333,42 @@ describe.skipIf(!hasPython())("lift: Python typed raise (throw with errorType)",
   });
 });
 
+describe.skipIf(!hasPython())("lift: provenance links nodes back to source spans (Python)", () => {
+  const SRC = [
+    "def validate(qty: int) -> None:",
+    "    if qty < 0:",
+    '        raise ValueError("negative quantity")',
+    "    print(qty)",
+    "",
+  ].join("\n");
+
+  /** Resolve a single-line span to the source text it covers — the visual↔code glue. */
+  function sliceOf(src: string, sp: { start: { line: number; col: number }; end: { line: number; col: number } }): string {
+    const lines = src.split("\n");
+    if (sp.start.line === sp.end.line) return lines[sp.start.line - 1]!.slice(sp.start.col, sp.end.col);
+    return lines[sp.start.line - 1]!.slice(sp.start.col);
+  }
+
+  it("stamps each control/effect node with the span it was lifted from", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+
+    const mod = sys.modules["validate"]!;
+    // The module itself carries provenance back to its `def`.
+    expect(mod.prov?.start.line).toBe(1);
+
+    const byKind = (k: string) => mod.interior.nodes.find((n) => n.kind === k)!;
+    const branch = byKind("branch");
+    const thr = byKind("throw");
+    const effect = byKind("effect");
+
+    // Every lifted node has provenance, and it resolves to the right source.
+    expect(branch.prov && sliceOf(SRC, branch.prov)).toBe("if qty < 0:");
+    expect(thr.prov && sliceOf(SRC, thr.prov)).toBe('raise ValueError("negative quantity")');
+    expect(effect.prov && sliceOf(SRC, effect.prov)).toBe("print(qty)");
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
   it("refuses a thrown bare literal (throw \"x\") — not an error construction nor a named value", () => {
     const src = [

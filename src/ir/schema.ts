@@ -15,6 +15,20 @@
  */
 import { z } from "zod";
 
+/**
+ * Provenance: the link from a derived IR node back to the concrete source span
+ * it was lifted from. This is the "glue" between the visual representation and
+ * the implementation — the source map that lets a human (or an LLM) resolve any
+ * node to the exact code it stands for, and verify that small slice in isolation
+ * rather than scanning the whole program.
+ *
+ * `line` is 1-based and `col` 0-based (CPython `ast`'s convention), so spans map
+ * directly onto editor coordinates. Optional throughout the IR: a hand-authored
+ * or AI-emitted graph need not carry provenance; only *lifted* graphs do.
+ */
+export const Pos = z.object({ line: z.number().int().nonnegative(), col: z.number().int().nonnegative() }).strict();
+export const SourceSpan = z.object({ start: Pos, end: Pos }).strict();
+
 /** Direction of a port relative to its owning module. */
 export const PortIO = z.enum(["in", "out"]);
 
@@ -52,7 +66,7 @@ export const Port = z
   })
   .strict();
 
-const nodeBase = { id: z.string().min(1) };
+const nodeBase = { id: z.string().min(1), prov: SourceSpan.optional() };
 
 /**
  * Node kinds are abstract imperative concepts, deliberately language-agnostic
@@ -149,6 +163,8 @@ export const Module = z
     kind: z.enum(["function", "class"]).optional(),
     ports: z.array(Port),
     interior: Interior,
+    /** Provenance for the module as a whole (e.g. a function/method/class def). */
+    prov: SourceSpan.optional(),
   })
   .strict();
 
@@ -163,6 +179,8 @@ export const System = z
   })
   .strict();
 
+export type Pos = z.infer<typeof Pos>;
+export type SourceSpan = z.infer<typeof SourceSpan>;
 export type PortIO = z.infer<typeof PortIO>;
 export type WireKind = z.infer<typeof WireKind>;
 export type Op = z.infer<typeof Op>;
