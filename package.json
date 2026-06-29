@@ -12,10 +12,13 @@
     "validate": "tsx src/cli/validate.ts",
     "transpile": "tsx src/cli/transpile.ts",
     "lift": "tsx src/cli/lift.ts",
+    "slice": "tsx src/cli/slice.ts",
+    "verify": "tsx --env-file-if-exists=.env.local src/cli/verify.ts",
     "render": "tsx src/cli/render.ts",
     "bench": "tsx benchmarks/run.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
     "elkjs": "^0.9.3",
     "typescript": "^5.6.3",
     "zod": "^3.23.8"

@@ -14,7 +14,7 @@
  *     inlined again on the way back out — never spuriously bound to a variable.
  */
 import type { Class, Expr, Fn, Program, Stmt } from "../transpile/ast.js";
-import type { Module, Node, Port, System, Wire } from "../ir/schema.js";
+import type { Module, Node, Port, SourceSpan, System, Wire } from "../ir/schema.js";
 
 interface Ctx {
   nodes: Node[];
@@ -66,6 +66,7 @@ function lowerClass(
     kind: "class",
     ports: [],
     interior: { nodes, wires: [] },
+    ...(cls.span ? { prov: cls.span } : {}),
   };
 }
 
@@ -96,7 +97,7 @@ function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>)
     ctx.wires.push([open, "P:done", "control"]);
   }
 
-  return { title: fn.name, ports, interior: { nodes: ctx.nodes, wires: ctx.wires } };
+  return { title: fn.name, ports, interior: { nodes: ctx.nodes, wires: ctx.wires }, ...(fn.span ? { prov: fn.span } : {}) };
 }
 
 /** Lower a statement list, threading control from `entryFrom`. Returns the open
@@ -113,25 +114,25 @@ function lowerBlock(ctx: Ctx, stmts: Stmt[], entryFrom: string): string | null {
 function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
   switch (s.t) {
     case "print": {
-      const id = newNode(ctx, { kind: "effect", label: "print", io: "out", op: "print" });
+      const id = newNode(ctx, { kind: "effect", label: "print", io: "out", op: "print" }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.arg), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
     case "stateSet": {
-      const id = newNode(ctx, { kind: "stateSet", label: s.attr, attr: s.attr });
+      const id = newNode(ctx, { kind: "stateSet", label: s.attr, attr: s.attr }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
     case "expr": {
-      const id = lowerSequencedCall(ctx, expectCall(s.expr));
+      const id = lowerSequencedCall(ctx, expectCall(s.expr), undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
     case "let": {
       if (s.expr.t === "call") {
-        const id = lowerSequencedCall(ctx, s.expr, s.name);
+        const id = lowerSequencedCall(ctx, s.expr, s.name, s.span);
         ctx.wires.push([prev, id, "control"]);
         ctx.varMap.set(s.name, id);
         return id;
@@ -141,7 +142,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       return prev;
     }
     case "if": {
-      const id = newNode(ctx, { kind: "branch", label: "branch" });
+      const id = newNode(ctx, { kind: "branch", label: "branch" }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       lowerBlock(ctx, s.then, `${id}:then`);
@@ -149,7 +150,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       return null; // branch arms are terminal
     }
     case "for": {
-      const id = newNode(ctx, { kind: "loop", label: s.varName });
+      const id = newNode(ctx, { kind: "loop", label: s.varName }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.from), `${id}:from`, "data"]);
       ctx.wires.push([lowerExpr(ctx, s.to), `${id}:to`, "data"]);
       ctx.wires.push([prev, id, "control"]);
@@ -158,7 +159,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       return `${id}:done`;
     }
     case "while": {
-      const id = newNode(ctx, { kind: "while", label: "while" });
+      const id = newNode(ctx, { kind: "while", label: "while" }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       lowerBlock(ctx, s.body, `${id}:body`);
@@ -169,7 +170,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // bound element out on `item`. Like a counted loop's index, `item` is bound
       // BEFORE lowering the body that reads it; the iterable is evaluated in the
       // enclosing scope, so it is lowered first.
-      const id = newNode(ctx, { kind: "foreach", label: s.varName });
+      const id = newNode(ctx, { kind: "foreach", label: s.varName }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.iter), `${id}:iter`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       ctx.varMap.set(s.varName, `${id}:item`);
@@ -180,7 +181,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // Protected block + handler, rejoining at `done`. The catch binding (if
       // any) is a data-out `error`, bound BEFORE lowering the handler that reads
       // it — exactly like a counted loop's index. The body never sees it.
-      const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "" });
+      const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "" }, undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
       lowerBlock(ctx, s.body, `${id}:body`);
       if (s.catchParam) ctx.varMap.set(s.catchParam, `${id}:error`);
@@ -199,7 +200,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // control-out, so the chain dead-ends here (control escapes the function) —
       // exactly like a branch arm. Returning null stops the enclosing block. A
       // typed/custom error carries its constructor name on the node's `errorType`.
-      const id = newNode(ctx, { kind: "throw", label: "throw", ...(s.errorType ? { errorType: s.errorType } : {}) });
+      const id = newNode(ctx, { kind: "throw", label: "throw", ...(s.errorType ? { errorType: s.errorType } : {}) }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.arg), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return null;
@@ -207,7 +208,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
     case "rethrow": {
       // Terminal too — control escapes carrying the re-raised value. The only
       // difference from `throw` is that the value flows on UNWRAPPED.
-      const id = newNode(ctx, { kind: "rethrow", label: "rethrow" });
+      const id = newNode(ctx, { kind: "rethrow", label: "rethrow" }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return null;
@@ -224,9 +225,9 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
 }
 
 /** A call that is sequenced on the control wire: a module link or a stub. */
-function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: string): string {
+function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: string, prov?: SourceSpan): string {
   if (ctx.knownFns.has(e.name)) {
-    const id = newNode(ctx, { kind: "module", ref: e.name }, idHint);
+    const id = newNode(ctx, { kind: "module", ref: e.name }, idHint, prov);
     const params = ctx.fnParams.get(e.name) ?? [];
     e.args.forEach((arg, i) => {
       const port = params[i] ?? `arg${i}`;
@@ -234,7 +235,7 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     });
     return id;
   }
-  const id = newNode(ctx, { kind: "function", label: e.name }, idHint);
+  const id = newNode(ctx, { kind: "function", label: e.name }, idHint, prov);
   for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
   return id;
 }
@@ -430,10 +431,15 @@ function expectCall(e: Expr): Extract<Expr, { t: "call" }> {
   return e;
 }
 
-function newNode(ctx: Ctx, partial: Omit<Node, "id"> | Record<string, unknown>, idHint?: string): string {
+function newNode(
+  ctx: Ctx,
+  partial: Omit<Node, "id"> | Record<string, unknown>,
+  idHint?: string,
+  prov?: SourceSpan,
+): string {
   let id = idHint ?? `_n${ctx.counter.n++}`;
   while (ctx.used.has(id)) id = `${id}_${ctx.counter.n++}`;
   ctx.used.add(id);
-  ctx.nodes.push({ id, ...partial } as Node);
+  ctx.nodes.push({ id, ...partial, ...(prov ? { prov } : {}) } as Node);
   return id;
 }

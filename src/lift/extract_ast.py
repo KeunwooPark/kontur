@@ -18,6 +18,17 @@ def map_type(node):
     return "any"
 
 
+def span(node):
+    """Provenance: the source range a node was lifted from. `line` is 1-based,
+    `col` 0-based (CPython's convention). Returns None if positions are absent."""
+    if not hasattr(node, "lineno") or node.end_lineno is None:
+        return None
+    return {
+        "start": {"line": node.lineno, "col": node.col_offset},
+        "end": {"line": node.end_lineno, "col": node.end_col_offset},
+    }
+
+
 def expr(e):
     if isinstance(e, ast.Constant):
         return {"t": "lit", "value": e.value}
@@ -80,6 +91,15 @@ def range_stop_to(stop):
 
 
 def stmt(s):
+    """Lower a statement and stamp its source span (provenance) onto the result."""
+    d = _stmt(s)
+    sp = span(s)
+    if sp is not None:
+        d["span"] = sp
+    return d
+
+
+def _stmt(s):
     if (
         isinstance(s, ast.Assign)
         and len(s.targets) == 1
@@ -190,6 +210,9 @@ def func(f, is_method=False):
     out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in f.body]}
     if is_method:
         out["isMethod"] = True
+    sp = span(f)
+    if sp is not None:
+        out["span"] = sp
     return out
 
 
@@ -205,7 +228,11 @@ def klass(c):
             continue
         else:
             raise SystemExit("lift(py): unsupported class member: " + ast.dump(n))
-    return {"name": c.name, "fields": fields, "methods": methods}
+    out = {"name": c.name, "fields": fields, "methods": methods}
+    sp = span(c)
+    if sp is not None:
+        out["span"] = sp
+    return out
 
 
 tree = ast.parse(sys.stdin.read())
