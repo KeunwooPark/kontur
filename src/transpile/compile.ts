@@ -185,6 +185,12 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "throw") {
+        // Terminal: control escapes here, so the chain stops — like a branch arm.
+        stmts.push({ t: "throw", arg: this.resolveInput(node.id, "value") });
+        return stmts;
+      }
+
       if (node.kind === "stateSet") {
         stmts.push({ t: "stateSet", attr: node.attr, value: this.resolveInput(node.id, "value") });
         cur = this.controlNext(node.id);

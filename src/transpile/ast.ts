@@ -43,6 +43,13 @@ export type Stmt =
    * the source binds no error variable (`catch {}` / bare `except:`).
    */
   | { t: "try"; body: Stmt[]; catchParam?: string; handler: Stmt[] }
+  /**
+   * Raise an exception carrying a message expression. Terminal: control escapes,
+   * so nothing falls through after it. The IR models only an error-with-message
+   * (the catch-all counterpart of `try`); each backend wraps `arg` in its own
+   * error constructor (`throw new Error(arg)` / `raise Exception(arg)`).
+   */
+  | { t: "throw"; arg: Expr }
   | { t: "return"; expr: Expr }
   /** Return several named values (multi-output module). */
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] };

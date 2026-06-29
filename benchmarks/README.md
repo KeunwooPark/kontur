@@ -52,13 +52,16 @@ IR addition:
 | array literals | an `array` node — a pure list constructor |
 | Python comprehensions | a `comprehension` node — range + bound index + element expr |
 | try/catch | a `try` node — control-out `body`/`catch`/`done` + a data-out `error` binding |
+| throw / raise | a `throw` node — control-in + a data-in `value` (message), no control-out: terminal |
 
 …all in TypeScript and (where applicable) Python.
 
 `cases/unsupported/` — constructs still outside the IR vocabulary that must be
-refused: raising exceptions (`throw`/`raise`), which is non-local control flow
-with no IR node. (Catching is now modelled by the `try` node above; raising is
-not.) This keeps the fail-closed (reject) path exercised.
+refused: **re-raising a caught value** (`throw e` / bare `raise`). Raising is now
+modelled by the `throw` node above, but only as an error carrying a *message*
+(`throw new Error(msg)` / `raise Exception(msg)`) — the catch-all counterpart of
+`try`. Throwing an arbitrary non-message value is non-local control flow with no
+IR node, so it is refused. This keeps the fail-closed (reject) path exercised.
 
 ## Adding a case
 

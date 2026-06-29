@@ -108,6 +108,22 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
   if (ts.isWhileStatement(s)) {
     return { t: "while", cond: liftExpr(s.expression, sf), body: block(s.statement, sf) };
   }
+  if (ts.isThrowStatement(s)) {
+    // The IR models a single catch-all error carrying a message — the raising
+    // counterpart of the catch-all `try`. Only `throw new Error(<message>)` maps;
+    // re-raising a value (`throw e`) or a typed/custom error is non-local control
+    // flow we cannot faithfully reproduce, so refuse it rather than approximate.
+    const e = s.expression;
+    if (
+      ts.isNewExpression(e) &&
+      ts.isIdentifier(e.expression) &&
+      e.expression.text === "Error" &&
+      e.arguments?.length === 1
+    ) {
+      return { t: "throw", arg: liftExpr(e.arguments[0]!, sf) };
+    }
+    throw new Error(`lift(ts): unsupported throw (only \`throw new Error(message)\` is modelled)`);
+  }
   if (ts.isTryStatement(s)) {
     // The IR models a single catch-all handler. `finally` is non-local control
     // flow with no IR node; a try without catch is the same shape — refuse both

@@ -71,6 +71,7 @@ function lowerClass(
 
 function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>): Module {
   fn = normalizeReturns(fn);
+  fn = { ...fn, body: foldGuards(fn.body) };
   assertSupported(fn);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
@@ -181,6 +182,15 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.varMap.set(s.name, lowerExpr(ctx, s.expr));
       return prev;
     }
+    case "throw": {
+      // A terminal control node: the message flows into pin "value"; there is no
+      // control-out, so the chain dead-ends here (control escapes the function) —
+      // exactly like a branch arm. Returning null stops the enclosing block.
+      const id = newNode(ctx, { kind: "throw", label: "throw" });
+      ctx.wires.push([lowerExpr(ctx, s.arg), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return null;
+    }
     case "return": {
       ctx.returnSource = lowerExpr(ctx, s.expr);
       return prev;
@@ -282,6 +292,66 @@ function normalizeReturns(fn: Fn): Fn {
   const expr = ifReturnToExpr(last);
   if (!expr) return fn;
   return { ...fn, body: [...fn.body.slice(0, -1), { t: "return", expr }] };
+}
+
+/**
+ * Fold the statements that follow a guarding branch into the branch's surviving
+ * arm, so the IR's "a branch is terminal" model can represent guard clauses:
+ *
+ *   if (bad) { throw … }      ⟶      if (bad) { throw … } else { rest }
+ *   rest
+ *
+ * A branch escapes control when an arm is *terminal* (ends in a `throw`, or in a
+ * nested all-terminal branch). When exactly one arm escapes, the trailing
+ * statements are the continuation of the OTHER arm — there is no post-branch
+ * merge point in the graph, so they belong inside it. When NEITHER arm escapes
+ * yet code follows the branch, that is a real merge the IR cannot express: we
+ * refuse it loudly rather than silently drop the tail (manifesto: never lie).
+ */
+function foldGuards(stmts: Stmt[]): Stmt[] {
+  const out: Stmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = foldNested(stmts[i]!);
+    const rest = stmts.slice(i + 1);
+    if (s.t === "if" && rest.length > 0) {
+      const folded = foldGuards(rest);
+      const thenEscapes = isTerminal(s.then);
+      const elseEscapes = isTerminal(s.else);
+      if (thenEscapes && !elseEscapes) { out.push({ ...s, else: [...s.else, ...folded] }); return out; }
+      if (elseEscapes && !thenEscapes) { out.push({ ...s, then: [...s.then, ...folded] }); return out; }
+      if (!thenEscapes && !elseEscapes) {
+        throw new Error(
+          `lift: statements follow a branch whose arms both fall through — a ` +
+            `control-flow merge has no IR node (only a guarding branch, where one ` +
+            `arm escapes via throw, may carry a continuation)`,
+        );
+      }
+      // both arms escape ⇒ the tail is unreachable; leave it (dropped at lowering).
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+/** Recurse `foldGuards` into a statement's nested blocks. */
+function foldNested(s: Stmt): Stmt {
+  switch (s.t) {
+    case "if": return { ...s, then: foldGuards(s.then), else: foldGuards(s.else) };
+    case "for": return { ...s, body: foldGuards(s.body) };
+    case "while": return { ...s, body: foldGuards(s.body) };
+    case "try": return { ...s, body: foldGuards(s.body), handler: foldGuards(s.handler) };
+    default: return s;
+  }
+}
+
+/** Does this block always escape control (never fall through to a successor)? */
+function isTerminal(stmts: Stmt[]): boolean {
+  const last = stmts[stmts.length - 1];
+  if (!last) return false; // empty block falls through
+  if (last.t === "throw") return true;
+  // A branch escapes only if BOTH arms do; an empty/missing else falls through.
+  if (last.t === "if") return isTerminal(last.then) && isTerminal(last.else);
+  return false;
 }
 
 function ifReturnToExpr(s: Stmt): Expr | null {

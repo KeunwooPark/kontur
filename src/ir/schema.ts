@@ -71,9 +71,15 @@ export const Node = z.discriminatedUnion("kind", [
   // is the continuation after either path. Data-out "error" is the caught value
   // (catch-all semantics — the IR models no exception type), wired only when the
   // handler reads it. `label` is the catch binding name (like a loop's index var),
-  // or "" when the source binds no variable. There is no `throw`/`raise` node:
-  // raising is non-local control flow the IR deliberately does not model.
+  // or "" when the source binds no variable. Its raising counterpart is `throw`.
   z.object({ ...nodeBase, kind: z.literal("try"), label: z.string() }).strict(),
+  // Raise an exception. Control-in enters; one data-in "value" is the message.
+  // There is NO control-out: control leaves the visible graph (non-local), so the
+  // node is TERMINAL — drawn as a dead-end, the honest picture of an escape. It is
+  // the raising counterpart of `try`, and shares its catch-all stance: the IR
+  // models only "raise an error carrying a message" (TS `throw new Error(msg)` /
+  // Py `raise Exception(msg)`), never an exception type. `label` is always "throw".
+  z.object({ ...nodeBase, kind: z.literal("throw"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in
