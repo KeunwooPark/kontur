@@ -10,60 +10,56 @@
  * Module nodes carry `data-link` so the app shell can turn them into
  * hyperlinks; this function knows nothing about navigation.
  */
-import type { CanvasLayout, LaidOutNode, LaidOutPort, NodeKind } from "./layout.js";
+import type { CanvasLayout, LaidOutNode, LaidOutPort } from "./layout.js";
+import { defaultTheme, KINDS, type StyledKind, type Theme } from "./theme.js";
 
-const THEME = {
-  edgeControl: "#e7eaf3",
-  edgeData: "#5b9cff",
-  text: "#e6e9ef",
-  textMuted: "#8b93a7",
-  portControl: "#e7eaf3",
-  portData: "#5b9cff",
-};
+/** Per-kind glyph — structural (the node's identity), so it is not themed. */
+const GLYPH = Object.fromEntries(KINDS.map((k) => [k.kind, k.glyph])) as Record<StyledKind, string>;
 
-const KIND_STYLE: Record<Exclude<NodeKind, "boundary">, { fill: string; stroke: string; glyph: string }> = {
-  function: { fill: "#16263f", stroke: "#4f8cf0", glyph: "ƒ" },
-  branch: { fill: "#3a2a12", stroke: "#e0a13a", glyph: "◆" },
-  loop: { fill: "#2a1c3d", stroke: "#a878e8", glyph: "↻" },
-  effect: { fill: "#12301f", stroke: "#3fbf7f", glyph: "▮" },
-  const: { fill: "#1b1f27", stroke: "#5b6472", glyph: "#" },
-  module: { fill: "#0f2e33", stroke: "#36c6d6", glyph: "⧉" },
-};
+/**
+ * A "knockout" halo: paint the text's own outline in the local background
+ * colour first (paint-order=stroke), so the glyphs stay legible wherever a wire
+ * happens to pass beneath them. This is the overlap guard for labels that sit
+ * over the canvas rather than inside a filled node body.
+ */
+function halo(bg: string): string {
+  return ` paint-order="stroke" stroke="${bg}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"`;
+}
 
-export function renderCanvasSvg(layout: CanvasLayout): string {
+export function renderCanvasSvg(layout: CanvasLayout, theme: Theme = defaultTheme): string {
   const w = Math.max(layout.width, 1);
   const h = Math.max(layout.height, 1);
-  const edges = layout.edges.map(renderEdge).join("");
-  const nodes = layout.nodes.map(renderNode).join("");
+  const edges = layout.edges.map((e) => renderEdge(e, theme)).join("");
+  const nodes = layout.nodes.map((n) => renderNode(n, theme)).join("");
   return [
     `<svg class="kontur-canvas" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" `,
     `xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,sans-serif">`,
-    defs(),
+    defs(theme),
     `<g class="edges" fill="none">${edges}</g>`,
     `<g class="nodes">${nodes}</g>`,
     `</svg>`,
   ].join("");
 }
 
-function defs(): string {
+function defs(theme: Theme): string {
   return [
     `<defs>`,
     `<marker id="arrow-control" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">`,
-    `<path d="M0 0 L10 5 L0 10 z" fill="${THEME.edgeControl}"/></marker>`,
+    `<path d="M0 0 L10 5 L0 10 z" fill="${theme.edgeControl}"/></marker>`,
     `<marker id="arrow-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">`,
-    `<path d="M0 0 L10 5 L0 10 z" fill="${THEME.edgeData}"/></marker>`,
+    `<path d="M0 0 L10 5 L0 10 z" fill="${theme.edgeData}"/></marker>`,
     `</defs>`,
   ].join("");
 }
 
 // --- edges ----------------------------------------------------------------
 
-function renderEdge(edge: CanvasLayout["edges"][number]): string {
+function renderEdge(edge: CanvasLayout["edges"][number], theme: Theme): string {
   const d = pathThrough(edge.points);
   if (edge.wire === "control") {
-    return `<path class="wire wire-control" d="${d}" stroke="${THEME.edgeControl}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-control)"/>`;
+    return `<path class="wire wire-control" d="${d}" stroke="${theme.edgeControl}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-control)"/>`;
   }
-  return `<path class="wire wire-data" d="${d}" stroke="${THEME.edgeData}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-data)"/>`;
+  return `<path class="wire wire-data" d="${d}" stroke="${theme.edgeData}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-data)"/>`;
 }
 
 /** Polyline with lightly rounded corners for readability. */
@@ -96,10 +92,11 @@ function approach(corner: { x: number; y: number }, toward: { x: number; y: numb
 
 // --- nodes ----------------------------------------------------------------
 
-function renderNode(node: LaidOutNode): string {
-  if (node.kind === "boundary") return renderBoundary(node);
+function renderNode(node: LaidOutNode, theme: Theme): string {
+  if (node.kind === "boundary") return renderBoundary(node, theme);
 
-  const style = KIND_STYLE[node.kind];
+  const style = theme.kinds[node.kind];
+  const glyph = GLYPH[node.kind];
   const isLink = node.kind === "module" && node.ref;
   const cx = node.x + node.w / 2;
 
@@ -122,14 +119,14 @@ function renderNode(node: LaidOutNode): string {
 
   // kind glyph (top-left)
   parts.push(
-    `<text x="${r(node.x + 8)}" y="${r(node.y + 15)}" font-size="11" fill="${style.stroke}" opacity="0.85">${esc(style.glyph)}</text>`,
+    `<text x="${r(node.x + 8)}" y="${r(node.y + 15)}" font-size="11" fill="${style.stroke}" opacity="0.85">${esc(glyph)}</text>`,
   );
 
   // label (centred)
-  const labelFill = node.kind === "const" ? THEME.text : THEME.text;
+  const labelFill = theme.text;
   const mono = node.kind === "const" ? ` font-family="ui-monospace,SFMono-Regular,Menlo,monospace"` : "";
   parts.push(
-    `<text x="${r(cx)}" y="${r(node.y + node.h / 2 + 4)}" font-size="12" text-anchor="middle" fill="${labelFill}"${mono}>${esc(node.label)}</text>`,
+    `<text x="${r(cx)}" y="${r(node.y + node.h / 2 + 4)}" font-size="12" text-anchor="middle" fill="${labelFill}"${halo(style.fill)}${mono}>${esc(node.label)}</text>`,
   );
   if (isLink) {
     parts.push(
@@ -138,43 +135,45 @@ function renderNode(node: LaidOutNode): string {
   }
 
   // ports
-  for (const p of node.ports) parts.push(renderPort(p));
+  for (const p of node.ports) parts.push(renderPort(p, theme, style.fill));
 
   parts.push(`</g>`);
   return parts.join("");
 }
 
-function renderBoundary(node: LaidOutNode): string {
-  const stroke = node.ports[0]?.wire === "control" ? THEME.edgeControl : THEME.edgeData;
+function renderBoundary(node: LaidOutNode, theme: Theme): string {
+  const stroke = node.ports[0]?.wire === "control" ? theme.edgeControl : theme.edgeData;
   const cx = node.x + node.w / 2;
   const label = node.sublabel ? `${node.label}: ${node.sublabel}` : node.label;
   const parts: string[] = [`<g class="node node-boundary">`];
   parts.push(
     `<rect x="${r(node.x)}" y="${r(node.y)}" width="${r(node.w)}" height="${r(node.h)}" rx="${r(node.h / 2)}" ` +
-      `fill="#11151c" stroke="${stroke}" stroke-width="1.25"/>`,
+      `fill="${theme.panel}" stroke="${stroke}" stroke-width="1.25"/>`,
   );
   parts.push(
-    `<text x="${r(cx)}" y="${r(node.y + node.h / 2 + 4)}" font-size="11" text-anchor="middle" fill="${THEME.text}">${esc(label)}</text>`,
+    `<text x="${r(cx)}" y="${r(node.y + node.h / 2 + 4)}" font-size="11" text-anchor="middle" fill="${theme.text}"${halo(theme.panel)}>${esc(label)}</text>`,
   );
-  for (const p of node.ports) parts.push(renderPort(p));
+  // marker only — the centred label already names this port, and a per-port
+  // label here would land in the wire channel and collide with the wires.
+  for (const p of node.ports) parts.push(renderPort(p, theme, theme.panel, false));
   parts.push(`</g>`);
   return parts.join("");
 }
 
-function renderPort(p: LaidOutPort): string {
-  const color = p.wire === "control" ? THEME.portControl : THEME.portData;
+function renderPort(p: LaidOutPort, theme: Theme, bg: string, labeled = true): string {
+  const color = p.wire === "control" ? theme.edgeControl : theme.edgeData;
   const marker =
     p.wire === "control"
       ? // triangle pointing along flow (right)
         `<path d="${triangle(p.x, p.y, 4.5)}" fill="${color}"/>`
       : `<circle cx="${r(p.x)}" cy="${r(p.y)}" r="3.4" fill="${color}"/>`;
-  if (!p.name) return marker;
+  if (!p.name || !labeled) return marker;
 
-  // label just inside the box edge
+  // label just inside the box edge, knocked out against the node body
   const inside = p.io === "in";
   const lx = inside ? p.x + 8 : p.x - 8;
   const anchor = inside ? "start" : "end";
-  const label = `<text x="${r(lx)}" y="${r(p.y + 3)}" font-size="8.5" text-anchor="${anchor}" fill="${THEME.textMuted}">${esc(p.name)}</text>`;
+  const label = `<text x="${r(lx)}" y="${r(p.y + 3)}" font-size="8.5" text-anchor="${anchor}" fill="${theme.textMuted}"${halo(bg)}>${esc(p.name)}</text>`;
   return marker + label;
 }
 
