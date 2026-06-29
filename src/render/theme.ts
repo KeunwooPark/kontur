@@ -27,6 +27,9 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
   { kind: "module", glyph: "⧉", label: "module" },
+  { kind: "state", glyph: "▣", label: "state — attribute" },
+  { kind: "stateGet", glyph: "↥", label: "read attribute" },
+  { kind: "stateSet", glyph: "↧", label: "write attribute" },
 ];
 
 export interface Theme {
@@ -89,6 +92,11 @@ export const paper: Theme = {
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
     module: { fill: "#fce8dd", stroke: "#d55e00" }, // vermillion
+    // state family — one shared indigo hue so attributes + their accessors read
+    // as a group, distinct from the six flow kinds above.
+    state: { fill: "#e6e7fb", stroke: "#4b4fc4" },
+    stateGet: { fill: "#eceefc", stroke: "#5a67d8" },
+    stateSet: { fill: "#eceefc", stroke: "#5a67d8" },
   },
 };
 
@@ -113,6 +121,9 @@ export const ink: Theme = {
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
     module: { fill: "#0f2e33", stroke: "#36c6d6" },
+    state: { fill: "#1e1f3a", stroke: "#8b8ff0" },
+    stateGet: { fill: "#191b30", stroke: "#7c83e8" },
+    stateSet: { fill: "#191b30", stroke: "#7c83e8" },
   },
 };
 

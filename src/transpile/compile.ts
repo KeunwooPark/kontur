@@ -16,7 +16,7 @@
  */
 import type { Module, Node, Op, System } from "../ir/schema.js";
 import { parseEndpoint } from "../ir/endpoint.js";
-import type { Expr, Fn, Program, Stmt } from "./ast.js";
+import type { Class as AstClass, Expr, Field, Fn, Program, Stmt } from "./ast.js";
 
 const BINARY_OPS = new Set<Op>([
   "add", "sub", "mul", "div", "mod",
@@ -25,11 +25,53 @@ const BINARY_OPS = new Set<Op>([
 ]);
 
 export function compile(system: System): Program {
+  // A class module's `module`-link nodes are its methods; those method modules
+  // are emitted *inside* the class, never again as free functions. Map each
+  // method module id → its simple method name (the id is `${classId}.${name}`).
+  const methodName = new Map<string, string>();
+  for (const [id, mod] of Object.entries(system.modules)) {
+    if (mod.kind !== "class") continue;
+    for (const node of mod.interior.nodes) {
+      if (node.kind === "module") {
+        const simple = node.ref.startsWith(`${id}.`) ? node.ref.slice(id.length + 1) : node.ref;
+        methodName.set(node.ref, simple);
+      }
+    }
+  }
+
+  const classes: AstClass[] = [];
   const functions: Fn[] = [];
   for (const [id, mod] of Object.entries(system.modules)) {
-    functions.push(new ModuleCompiler(id, mod, system).compile());
+    if (mod.kind === "class") {
+      classes.push(compileClass(id, mod, system, methodName));
+    } else if (!methodName.has(id)) {
+      functions.push(new ModuleCompiler(id, mod, system).compile());
+    }
+    // else: a method module — emitted within its class above.
   }
-  return { functions };
+  return { functions, classes };
+}
+
+function compileClass(
+  id: string,
+  mod: Module,
+  system: System,
+  methodName: Map<string, string>,
+): AstClass {
+  const fields: Field[] = mod.interior.nodes
+    .filter((n): n is Extract<Node, { kind: "state" }> => n.kind === "state")
+    .map((n) => ({ name: n.label, type: n.type }));
+  const methods: Fn[] = mod.interior.nodes
+    .filter((n): n is Extract<Node, { kind: "module" }> => n.kind === "module")
+    .map((n) => {
+      const methodMod = system.modules[n.ref];
+      if (!methodMod) throw new Error(`class "${id}": method module "${n.ref}" not found`);
+      const fn = new ModuleCompiler(n.ref, methodMod, system).compile();
+      fn.name = methodName.get(n.ref) ?? n.ref;
+      fn.isMethod = true;
+      return fn;
+    });
+  return { name: id, fields, methods };
 }
 
 class ModuleCompiler {
@@ -120,6 +162,12 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "stateSet") {
+        stmts.push({ t: "stateSet", attr: node.attr, value: this.resolveInput(node.id, "value") });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "effect") {
         if (node.op === "print") {
           stmts.push({ t: "print", arg: this.resolveInput(node.id, "value") });
@@ -147,6 +195,8 @@ class ModuleCompiler {
     switch (node.kind) {
       case "const":
         return { t: "lit", value: node.value };
+      case "stateGet":
+        return { t: "stateGet", attr: node.attr };
       case "function": {
         if (node.op && BINARY_OPS.has(node.op)) {
           return { t: "bin", op: node.op, a: this.resolveInput(node.id, "a"), b: this.resolveInput(node.id, "b") };

@@ -1,7 +1,7 @@
 /** Render the neutral AST as TypeScript. */
 import type { Op } from "../ir/schema.js";
-import type { Expr, Fn, Program, Stmt } from "./ast.js";
-import { camel } from "./naming.js";
+import type { Class, Expr, Fn, Program, Stmt } from "./ast.js";
+import { camel, pascal } from "./naming.js";
 
 const BIN: Partial<Record<Op, string>> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%",
@@ -34,6 +34,7 @@ function expr(e: Expr): string {
     case "lit": return lit(e.value);
     case "var": return camel(e.name);
     case "member": return `${camel(e.name)}.${e.member}`;
+    case "stateGet": return `this.${camel(e.attr)}`;
     case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
     case "un": return `(!${expr(e.x)})`;
     case "call": return `${camel(e.name)}(${e.args.map(expr).join(", ")})`;
@@ -48,6 +49,8 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}${expr(s.expr)};`];
     case "print":
       return [`${indent}console.log(${expr(s.arg)});`];
+    case "stateSet":
+      return [`${indent}this.${camel(s.attr)} = ${expr(s.value)};`];
     case "return":
       return [`${indent}return ${expr(s.expr)};`];
     case "returnObject":
@@ -72,18 +75,36 @@ function stmt(s: Stmt, indent: string): string[] {
   }
 }
 
-function fn(f: Fn): string {
-  const params = f.params.map((p) => `${camel(p.name)}: ${tsType(p.type)}`).join(", ");
-  const ret =
-    f.returns.length === 0 ? "void"
+function returnType(f: Fn): string {
+  return f.returns.length === 0 ? "void"
     : f.returns.length === 1 ? tsType(f.returns[0]!.type)
     : `{ ${f.returns.map((r) => `${r.name}: ${tsType(r.type)}`).join("; ")} }`;
-  const lines = [`export function ${camel(f.name)}(${params}): ${ret} {`];
-  for (const s of f.body) lines.push(...stmt(s, "  "));
+}
+
+function fn(f: Fn, indent = ""): string {
+  const params = f.params.map((p) => `${camel(p.name)}: ${tsType(p.type)}`).join(", ");
+  // A method drops the `export function` preamble; the class owns it.
+  const head = f.isMethod
+    ? `${indent}${camel(f.name)}(${params}): ${returnType(f)} {`
+    : `${indent}export function ${camel(f.name)}(${params}): ${returnType(f)} {`;
+  const lines = [head];
+  for (const s of f.body) lines.push(...stmt(s, indent + "  "));
+  lines.push(`${indent}}`);
+  return lines.join("\n");
+}
+
+function cls(c: Class): string {
+  const lines = [`export class ${pascal(c.name)} {`];
+  for (const f of c.fields) lines.push(`  ${camel(f.name)}: ${tsType(f.type)};`);
+  for (const m of c.methods) {
+    lines.push("");
+    lines.push(fn(m, "  "));
+  }
   lines.push("}");
   return lines.join("\n");
 }
 
 export function emitTypeScript(program: Program): string {
-  return program.functions.map(fn).join("\n\n") + "\n";
+  const chunks = [...program.classes.map(cls), ...program.functions.map((f) => fn(f))];
+  return chunks.join("\n\n") + "\n";
 }

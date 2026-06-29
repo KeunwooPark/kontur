@@ -12,7 +12,8 @@
     "validate": "tsx src/cli/validate.ts",
     "transpile": "tsx src/cli/transpile.ts",
     "lift": "tsx src/cli/lift.ts",
-    "render": "tsx src/cli/render.ts"
+    "render": "tsx src/cli/render.ts",
+    "bench": "tsx benchmarks/run.ts"
   },
   "dependencies": {
     "elkjs": "^0.9.3",

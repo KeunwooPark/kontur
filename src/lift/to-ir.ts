@@ -13,7 +13,7 @@
  *   - Pure sub-expressions (consts, ops) become un-sequenced nodes, so they get
  *     inlined again on the way back out — never spuriously bound to a variable.
  */
-import type { Expr, Fn, Program, Stmt } from "../transpile/ast.js";
+import type { Class, Expr, Fn, Program, Stmt } from "../transpile/ast.js";
 import type { Module, Node, Port, System, Wire } from "../ir/schema.js";
 
 interface Ctx {
@@ -33,7 +33,40 @@ export function liftProgram(program: Program): System {
   const fnParams = new Map(program.functions.map((f) => [f.name, f.params.map((p) => p.name)]));
   const modules: Record<string, Module> = {};
   for (const fn of program.functions) modules[fn.name] = lowerFn(fn, knownFns, fnParams);
-  return { features: program.functions.map((f) => f.name), modules };
+  for (const cls of program.classes) lowerClass(cls, modules, knownFns, fnParams);
+  // Entry-point canvases: the top-level declarations (free functions + classes),
+  // never the methods — those are reached by descending into the class.
+  const features = [...program.functions.map((f) => f.name), ...program.classes.map((c) => c.name)];
+  return { features, modules };
+}
+
+/**
+ * A class becomes a module of kind "class": a namespace canvas whose interior is
+ * a `state` cell per attribute and a `module`-link per method. Each method is a
+ * function module keyed `${ClassName}.${methodName}`, reached by descending the
+ * link — exactly the manifesto's hyperlink-navigation model.
+ */
+function lowerClass(
+  cls: Class,
+  modules: Record<string, Module>,
+  knownFns: Set<string>,
+  fnParams: Map<string, string[]>,
+): void {
+  const nodes: Node[] = [];
+  for (const field of cls.fields) {
+    nodes.push({ id: field.name, kind: "state", label: field.name, type: field.type });
+  }
+  for (const m of cls.methods) {
+    const methodId = `${cls.name}.${m.name}`;
+    modules[methodId] = lowerFn(m, knownFns, fnParams);
+    nodes.push({ id: methodId, kind: "module", ref: methodId });
+  }
+  modules[cls.name] = {
+    title: cls.name,
+    kind: "class",
+    ports: [],
+    interior: { nodes, wires: [] },
+  };
 }
 
 function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>): Module {
@@ -80,6 +113,12 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
     case "print": {
       const id = newNode(ctx, { kind: "effect", label: "print", io: "out", op: "print" });
       ctx.wires.push([lowerExpr(ctx, s.arg), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
+    case "stateSet": {
+      const id = newNode(ctx, { kind: "stateSet", label: s.attr, attr: s.attr });
+      ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
@@ -148,6 +187,8 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
   switch (e.t) {
     case "lit":
       return newNode(ctx, { kind: "const", label: String(e.value), value: e.value });
+    case "stateGet":
+      return newNode(ctx, { kind: "stateGet", label: e.attr, attr: e.attr });
     case "var": {
       const ep = ctx.varMap.get(e.name);
       if (ep === undefined) throw new Error(`lift: unbound variable "${e.name}"`);

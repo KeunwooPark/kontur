@@ -21,7 +21,10 @@ import { derivePins, portId, boundaryPortId, pinKey, type Pin } from "./ports.js
 
 // --- output geometry -------------------------------------------------------
 
-export type NodeKind = "function" | "branch" | "loop" | "effect" | "const" | "module" | "boundary";
+export type NodeKind =
+  | "function" | "branch" | "loop" | "effect" | "const" | "module"
+  | "state" | "stateGet" | "stateSet"
+  | "boundary";
 
 export interface LaidOutPort {
   id: string;
