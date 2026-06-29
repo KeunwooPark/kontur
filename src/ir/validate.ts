@@ -95,6 +95,26 @@ function checkModule(
     }
   }
 
+  // --- class / state hygiene ------------------------------------------------
+  // A class canvas is a namespace: only `state` cells and `module` links
+  // (methods). State cells exist only on a class canvas; methods reach the
+  // enclosing class's attributes through stateGet/stateSet, never `state`.
+  const isClass = mod.kind === "class";
+  for (const node of mod.interior.nodes) {
+    if (isClass && node.kind !== "state" && node.kind !== "module") {
+      issues.push({
+        path: `${at}.interior.nodes[${node.id}]`,
+        message: `class module may only contain "state" and "module" (method) nodes, not "${node.kind}"`,
+      });
+    }
+    if (!isClass && node.kind === "state") {
+      issues.push({
+        path: `${at}.interior.nodes[${node.id}]`,
+        message: `"state" node "${node.id}" is only allowed inside a class module`,
+      });
+    }
+  }
+
   // --- wires + boundary invariant ------------------------------------------
   // Track, per declared port, which sides it was wired on so we can confirm
   // each port has exactly its correct boundary connection.

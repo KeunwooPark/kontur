@@ -101,10 +101,24 @@ Node =
   | { kind:"const",    label, value }          // literal, leaf
   | { kind:"module",   ref:ModuleId, ports }   // a nested module = a link
                                                //   ports MUST equal modules[ref].ports
+  | { kind:"state",    label, type }           // a class attribute (a stored cell)
+  | { kind:"stateGet", label, attr }           // read an attribute → pure data source
+  | { kind:"stateSet", label, attr }           // write an attribute → control-sequenced effect
 
 Wire = [from, to, kind:"data"|"control"]
   // endpoints: "nodeId", "nodeId:port", or "P:portName" for the module boundary
 ```
+
+### Classes (a class IS a module)
+A class extends the "Module IS a Node" idea: it is a `Module` with `kind:"class"`
+whose interior is its **state** (one `state` cell per attribute) and its
+**methods** (one `module`-link per method, keyed `ClassName.methodName`).
+Navigating into a method link opens that method's flow on its own canvas, like
+any other module. A method reaches the enclosing class's attributes through
+`stateGet` (a pure data source, `this.x`) and `stateSet` (an effect sequenced on
+the control wire, `this.x = …`) — keeping effects as control-wire-sequenced
+nodes per issue #4. A class module carries no boundary ports, so the
+port-boundary invariant applies only to its methods.
 
 Note on module-node `ports`: in the navigator demo they are **restated by hand** and checked
 after the fact. That's a known wart — see Issue #5. They should be **derived** from

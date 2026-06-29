@@ -67,6 +67,15 @@ export const Node = z.discriminatedUnion("kind", [
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
   z.object({ ...nodeBase, kind: z.literal("module"), ref: z.string().min(1) }).strict(),
+  // --- class support (a class is a module of kind "class") ------------------
+  // A stored attribute, drawn on the class canvas. `label` is the attribute
+  // name; `type` is its type label (issue #3). It owns no flow — it is a cell.
+  z.object({ ...nodeBase, kind: z.literal("state"), label: z.string(), type: z.string().min(1) }).strict(),
+  // Read an attribute of the enclosing class: a pure data source (`this.attr`).
+  z.object({ ...nodeBase, kind: z.literal("stateGet"), label: z.string(), attr: z.string().min(1) }).strict(),
+  // Write an attribute of the enclosing class: a control-sequenced effect
+  // (`this.attr = …`), with one data in-pin "value". Effects-as-control-nodes.
+  z.object({ ...nodeBase, kind: z.literal("stateSet"), label: z.string(), attr: z.string().min(1) }).strict(),
 ]);
 
 /**
@@ -87,6 +96,13 @@ export const Interior = z
 export const Module = z
   .object({
     title: z.string().min(1),
+    /**
+     * What this module *is*. A "function" (default) has a control/data flow
+     * interior; a "class" is a namespace whose interior holds `state` cells and
+     * `module`-link nodes for its methods. Optional for back-compat: absent ⇒
+     * "function".
+     */
+    kind: z.enum(["function", "class"]).optional(),
     ports: z.array(Port),
     interior: Interior,
   })

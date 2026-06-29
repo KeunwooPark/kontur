@@ -20,3 +20,10 @@ export function snake(s: string): string {
   if (w.length === 0) return "_";
   return w.map((p) => p.toLowerCase()).join("_");
 }
+
+/** PascalCase — for type/class names (e.g. "user account" → "UserAccount"). */
+export function pascal(s: string): string {
+  const w = words(s);
+  if (w.length === 0) return "_";
+  return w.map((p) => p[0]!.toUpperCase() + p.slice(1).toLowerCase()).join("");
+}

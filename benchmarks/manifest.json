@@ -1,0 +1,149 @@
+{
+  "description": "Graded synthetic benchmark for the Kontur pipeline (lift -> validate -> transpile -> render). Supported cases are scored on round-trip fidelity (lift -> transpile -> lift -> transpile is a fixed point). Unsupported cases must be rejected loudly by the lifter (fail-closed, never silently lose code).",
+  "cases": [
+    {
+      "id": "01-print-effect",
+      "file": "cases/supported/01-print-effect.ts",
+      "expect": "roundtrip",
+      "feature": "effect",
+      "title": "Single print effect",
+      "note": "Simplest leaf: one console.log on the control wire, no params, no return."
+    },
+    {
+      "id": "02-arithmetic",
+      "file": "cases/supported/02-arithmetic.ts",
+      "expect": "roundtrip",
+      "feature": "data/return",
+      "title": "Pure arithmetic with tail return",
+      "note": "Two params, one binary op, single tail return -> a data-only module."
+    },
+    {
+      "id": "03-let-pipeline",
+      "file": "cases/supported/03-let-pipeline.ts",
+      "expect": "roundtrip",
+      "feature": "stub calls / locals",
+      "title": "Sequenced stub-call pipeline",
+      "note": "let bindings of unknown calls become sequenced function nodes; node ids preserve the local names."
+    },
+    {
+      "id": "04-counted-loop",
+      "file": "cases/supported/04-counted-loop.ts",
+      "expect": "roundtrip",
+      "feature": "loop",
+      "title": "Counted for-loop",
+      "note": "Inclusive counted loop with a print body; the loop carries the control wire through to done."
+    },
+    {
+      "id": "05-top-level-branch",
+      "file": "cases/supported/05-top-level-branch.ts",
+      "expect": "roundtrip",
+      "feature": "branch",
+      "title": "Top-level if/else (no returns in arms)",
+      "note": "Probes branch-as-terminal lowering: both arms print. A top-level branch dead-ends control, so the module has no done out-port."
+    },
+    {
+      "id": "06-fizzbuzz",
+      "file": "cases/supported/06-fizzbuzz.ts",
+      "expect": "roundtrip",
+      "feature": "loop + nested branch + effect",
+      "title": "FizzBuzz",
+      "note": "The canonical example, authored as source: loop, 3-deep nested branch, four print effects."
+    },
+    {
+      "id": "07-multi-module",
+      "file": "cases/supported/07-multi-module.ts",
+      "expect": "roundtrip",
+      "feature": "module link / navigation",
+      "title": "Multi-module call graph",
+      "note": "Two functions; calls to the sibling become module-link nodes. Exercises the multi-canvas hyperlink renderer."
+    },
+    {
+      "id": "08-python-loop",
+      "file": "cases/supported/08-python-loop.py",
+      "expect": "roundtrip",
+      "feature": "loop (python)",
+      "title": "Python counted loop",
+      "note": "Exercises the Python lifter (real ast module) and range(from, to + 1) inverse lowering."
+    },
+    {
+      "id": "09-python-multi-module",
+      "file": "cases/supported/09-python-multi-module.py",
+      "expect": "roundtrip",
+      "feature": "module link (python)",
+      "title": "Python multi-module call graph",
+      "note": "Python sibling calls become module links; round-trips through the Python backend."
+    },
+    {
+      "id": "10-class",
+      "file": "cases/supported/10-class.ts",
+      "expect": "roundtrip",
+      "feature": "class / state",
+      "title": "Class with attribute + methods",
+      "note": "A class lifts to a module of kind \"class\": a `state` cell for the attribute and a method-link per method. Methods read/write state via stateGet/stateSet. Descend a method link to see its flow."
+    },
+    {
+      "id": "11-python-class",
+      "file": "cases/supported/11-python-class.py",
+      "expect": "roundtrip",
+      "feature": "class / state (python)",
+      "title": "Python class with attribute + methods",
+      "note": "Same class model through the Python backend: `self.attr` access, methods drop the implicit self, round-trips."
+    },
+    {
+      "id": "while-loop",
+      "file": "cases/unsupported/while-loop.ts",
+      "expect": "reject",
+      "feature": "while loop",
+      "title": "while loop (unsupported statement)",
+      "note": "Only counted for-loops exist in the IR; a while must be refused, not approximated."
+    },
+    {
+      "id": "early-return",
+      "file": "cases/unsupported/early-return.ts",
+      "expect": "reject",
+      "feature": "early/branch return",
+      "title": "Return inside branch arms",
+      "note": "The IR has one boundary out-port fed by one wire, so only a single tail return is representable."
+    },
+    {
+      "id": "array-literal",
+      "file": "cases/unsupported/array-literal.ts",
+      "expect": "reject",
+      "feature": "array literal",
+      "title": "Array literal (unsupported expression)",
+      "note": "No composite/collection types in the IR vocabulary yet (see manifesto open issue #3, types)."
+    },
+    {
+      "id": "ternary",
+      "file": "cases/unsupported/ternary.ts",
+      "expect": "reject",
+      "feature": "conditional expression",
+      "title": "Ternary expression",
+      "note": "Conditionals are control-wire branches, not data expressions; a ternary has no IR form."
+    },
+    {
+      "id": "reassign",
+      "file": "cases/unsupported/reassign.ts",
+      "expect": "reject",
+      "feature": "mutation / augmented assignment",
+      "title": "In-place reassignment (n += 1)",
+      "note": "Dataflow is single-assignment; mutating a binding has no wire representation."
+    },
+    {
+      "id": "template-string",
+      "file": "cases/unsupported/template-string.ts",
+      "expect": "reject",
+      "feature": "template literal",
+      "title": "Template string interpolation",
+      "note": "String interpolation needs a concat/format effect the IR does not model."
+    },
+    {
+      "id": "py-comprehension",
+      "file": "cases/unsupported/py-comprehension.py",
+      "expect": "reject",
+      "feature": "list comprehension (python)",
+      "title": "Python list comprehension",
+      "note": "Comprehensions are collection-valued expressions outside the IR vocabulary."
+    }
+  ]
+}

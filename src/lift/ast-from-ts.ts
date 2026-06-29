@@ -3,16 +3,33 @@
  * TypeScript compiler API. Handles the subset our emitter produces.
  */
 import * as ts from "typescript";
-import type { Expr, Fn, Param, Program, Stmt } from "../transpile/ast.js";
+import type { Class, Expr, Field, Fn, Param, Program, Stmt } from "../transpile/ast.js";
 import type { Op } from "../ir/schema.js";
 
 export function parseTypeScript(source: string): Program {
   const sf = ts.createSourceFile("input.ts", source, ts.ScriptTarget.Latest, /*setParentNodes*/ true);
   const functions: Fn[] = [];
+  const classes: Class[] = [];
   sf.forEachChild((node) => {
     if (ts.isFunctionDeclaration(node) && node.name && node.body) functions.push(liftFn(node, sf));
+    else if (ts.isClassDeclaration(node) && node.name) classes.push(liftClass(node, sf));
   });
-  return { functions };
+  return { functions, classes };
+}
+
+function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
+  const fields: Field[] = [];
+  const methods: Fn[] = [];
+  for (const member of node.members) {
+    if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
+      fields.push({ name: member.name.text, type: mapType(member.type) });
+    } else if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.body) {
+      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true));
+    } else {
+      throw new Error(`lift(ts): unsupported class member "${ts.SyntaxKind[member.kind]}"`);
+    }
+  }
+  return { name: node.name!.text, fields, methods };
 }
 
 function mapType(t: ts.TypeNode | undefined): string {
@@ -27,16 +44,28 @@ function mapType(t: ts.TypeNode | undefined): string {
 }
 
 function liftFn(node: ts.FunctionDeclaration, sf: ts.SourceFile): Fn {
-  const params: Param[] = node.parameters.map((p) => ({
+  return liftCallable(node.name!.text, node.parameters, node.type, node.body!, sf, false);
+}
+
+/** Shared lowering for a function declaration and a class method. */
+function liftCallable(
+  name: string,
+  parameters: ts.NodeArray<ts.ParameterDeclaration>,
+  type: ts.TypeNode | undefined,
+  body: ts.Block,
+  sf: ts.SourceFile,
+  isMethod: boolean,
+): Fn {
+  const params: Param[] = parameters.map((p) => ({
     name: (p.name as ts.Identifier).text,
     type: mapType(p.type),
   }));
   const returns =
-    !node.type || node.type.kind === ts.SyntaxKind.VoidKeyword
+    !type || type.kind === ts.SyntaxKind.VoidKeyword
       ? []
-      : [{ name: "result", type: mapType(node.type) }];
-  const body = node.body!.statements.map((s) => liftStmt(s, sf));
-  return { name: node.name!.text, params, returns, body };
+      : [{ name: "result", type: mapType(type) }];
+  const stmts = body.statements.map((s) => liftStmt(s, sf));
+  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}) };
 }
 
 function block(stmt: ts.Statement, sf: ts.SourceFile): Stmt[] {
@@ -75,6 +104,15 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
       to: liftExpr(cond.right, sf),
       body: block(s.statement, sf),
     };
+  }
+  if (
+    ts.isExpressionStatement(s) &&
+    ts.isBinaryExpression(s.expression) &&
+    s.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    ts.isPropertyAccessExpression(s.expression.left) &&
+    s.expression.left.expression.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    return { t: "stateSet", attr: s.expression.left.name.text, value: liftExpr(s.expression.right, sf) };
   }
   if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
     const call = s.expression;
@@ -117,6 +155,9 @@ function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
   if (e.kind === ts.SyntaxKind.NullKeyword) return { t: "lit", value: null };
   if (ts.isIdentifier(e)) return { t: "var", name: e.text };
   if (ts.isPropertyAccessExpression(e)) {
+    if (e.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      return { t: "stateGet", attr: e.name.text };
+    }
     return { t: "member", name: (e.expression as ts.Identifier).text, member: e.name.text };
   }
   if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
