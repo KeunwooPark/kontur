@@ -51,17 +51,21 @@ IR addition:
 | reassignment (`n += 1`) | an SSA-style rebind, no node — round-trips to `n + 1` inline |
 | array literals | an `array` node — a pure list constructor |
 | Python comprehensions | a `comprehension` node — range + bound index + element expr |
+| for-each loops | a `foreach` node — the collection-driven loop (`iter` in, `item` out) |
 | try/catch | a `try` node — control-out `body`/`catch`/`done` + a data-out `error` binding |
 | throw / raise | a `throw` node — control-in + a data-in `value` (message), no control-out: terminal |
+| typed throw | the same `throw` node carrying `errorType` (`throw new TypeError` / `raise TypeError`) |
+| re-raise | a `rethrow` node — terminal sibling of `throw`; passes a named value on UNWRAPPED |
 
 …all in TypeScript and (where applicable) Python.
 
 `cases/unsupported/` — constructs still outside the IR vocabulary that must be
-refused: **re-raising a caught value** (`throw e` / bare `raise`). Raising is now
-modelled by the `throw` node above, but only as an error carrying a *message*
-(`throw new Error(msg)` / `raise Exception(msg)`) — the catch-all counterpart of
-`try`. Throwing an arbitrary non-message value is non-local control flow with no
-IR node, so it is refused. This keeps the fail-closed (reject) path exercised.
+refused: a **thrown bare literal** (`throw "x"`). Raising is now modelled three
+ways — an error carrying a *message* (`throw new Error(msg)`), a typed error
+constructor (`throw new TypeError(msg)`, via `errorType`), and re-raising an
+existing value (`rethrow`). But a bare literal is neither an error construction
+nor a named value, so it has no IR node and is refused. This keeps the
+fail-closed (reject) path exercised.
 
 ## Adding a case
 

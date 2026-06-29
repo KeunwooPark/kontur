@@ -202,7 +202,12 @@ class ModuleCompiler {
 
       if (node.kind === "throw") {
         // Terminal: control escapes here, so the chain stops — like a branch arm.
-        stmts.push({ t: "throw", arg: this.resolveInput(node.id, "value") });
+        // `errorType` (if any) carries the typed/custom error constructor forward.
+        stmts.push({
+          t: "throw",
+          arg: this.resolveInput(node.id, "value"),
+          ...(node.errorType ? { errorType: node.errorType } : {}),
+        });
         return stmts;
       }
 

@@ -202,12 +202,28 @@
       "note": "The same `rethrow` node through the Python backend: `raise e` (a named value, not wrapped) lifts and round-trips. A bare `raise` — the implicit current exception, with no value to wire — stays refused."
     },
     {
-      "id": "typed-throw",
-      "file": "cases/unsupported/typed-throw.ts",
-      "expect": "reject",
+      "id": "26-typed-throw",
+      "file": "cases/supported/26-typed-throw.ts",
+      "expect": "roundtrip",
       "feature": "exceptions / typed error",
-      "title": "throw a typed/custom error (unsupported)",
-      "note": "Raising is now modelled two ways — a fresh `Error` carrying a message (`throw`) and re-raising an existing value (`rethrow`). But a typed/custom error (`throw new TypeError(msg)`) carries an exception TYPE the catch-all IR has no node for, so it must be refused, not approximated. Keeps the fail-closed (reject) path under test."
+      "title": "throw a typed/custom error",
+      "note": "A typed error (`throw new TypeError(msg)`) lowers to a `throw` node carrying `errorType` — the one place the IR records an exception type, a bare constructor name passed across backends like any other identifier. Absent `errorType` stays the catch-all `Error`/`Exception`, so the plain `throw` (case 20) is byte-identical. Emitted as TS `throw new TypeError(...)` and Python `raise TypeError(...)`; `TypeError` exists in both, so it cross-transpiles faithfully."
+    },
+    {
+      "id": "27-py-typed-raise",
+      "file": "cases/supported/27-py-typed-raise.py",
+      "expect": "roundtrip",
+      "feature": "exceptions / typed error (python)",
+      "title": "Python raise a typed error",
+      "note": "The same typed `throw` node through the Python backend: `raise TypeError(message)` lifts with `errorType` preserved (not flattened to `Exception`) and round-trips, cross-transpiling to TS `throw new TypeError(...)`."
+    },
+    {
+      "id": "thrown-literal",
+      "file": "cases/unsupported/thrown-literal.ts",
+      "expect": "reject",
+      "feature": "exceptions / thrown literal",
+      "title": "throw a bare literal value (unsupported)",
+      "note": "Raising is now modelled three ways — a fresh `Error` from a message (`throw`), a typed error constructor (`throw new TypeError`, via `errorType`), and re-raising an existing value (`rethrow`). But a bare thrown literal (`throw \"x\"`) is neither an error construction nor a named value, so it has no IR node and must be refused, not approximated. Keeps the fail-closed (reject) path under test."
     }
   ]
 }

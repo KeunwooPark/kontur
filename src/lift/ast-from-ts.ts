@@ -127,21 +127,23 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
     // Two raising shapes are modelled, mirroring the two IR nodes:
     //   `throw new Error(msg)` → `throw`  (construct a fresh error from a message)
     //   `throw e`              → `rethrow` (re-raise an existing value unchanged)
-    // A typed/custom error (`throw new TypeError(…)`), a thrown literal, or any
-    // other expression is beyond the catch-all model, so it is refused, not faked.
+    // Constructing any single-arg error type maps too: the constructor name is
+    // carried as the throw node's `errorType` (`Error` stays the catch-all default,
+    // so it is left implicit). A thrown literal (`throw "x"`) or any other
+    // expression is neither a construction nor a named value, so it is refused.
     const e = s.expression;
     if (
       ts.isNewExpression(e) &&
       ts.isIdentifier(e.expression) &&
-      e.expression.text === "Error" &&
       e.arguments?.length === 1
     ) {
-      return { t: "throw", arg: liftExpr(e.arguments[0]!, sf) };
+      const ctor = e.expression.text;
+      return { t: "throw", arg: liftExpr(e.arguments[0]!, sf), ...(ctor === "Error" ? {} : { errorType: ctor }) };
     }
     if (ts.isIdentifier(e)) {
       return { t: "rethrow", value: { t: "var", name: e.text } };
     }
-    throw new Error(`lift(ts): unsupported throw (only \`throw new Error(message)\` or re-raising a value \`throw e\` is modelled)`);
+    throw new Error(`lift(ts): unsupported throw (only \`throw new <Error>(message)\` or re-raising a value \`throw e\` is modelled)`);
   }
   if (ts.isTryStatement(s)) {
     // The IR models a single catch-all handler. `finally` is non-local control

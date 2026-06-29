@@ -47,11 +47,12 @@ export type Stmt =
   | { t: "try"; body: Stmt[]; catchParam?: string; handler: Stmt[] }
   /**
    * Raise an exception carrying a message expression. Terminal: control escapes,
-   * so nothing falls through after it. The IR models only an error-with-message
-   * (the catch-all counterpart of `try`); each backend wraps `arg` in its own
-   * error constructor (`throw new Error(arg)` / `raise Exception(arg)`).
+   * so nothing falls through after it. `errorType` names the error constructor for
+   * a typed/custom error; absent ⇒ the catch-all `Error`/`Exception` (the raising
+   * counterpart of the catch-all `try`). Each backend wraps `arg` in that
+   * constructor (`throw new <errorType>(arg)` / `raise <errorType>(arg)`).
    */
-  | { t: "throw"; arg: Expr }
+  | { t: "throw"; arg: Expr; errorType?: string }
   /**
    * Re-raise an existing exception value unchanged (`throw e` / `raise e`).
    * Terminal, like `throw`, but the value is passed on AS-IS — no error
