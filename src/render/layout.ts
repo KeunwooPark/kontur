@@ -53,6 +53,8 @@ export interface LaidOutNode {
   ref?: string;
   /** For boundary nodes: which side of the contract this represents. */
   boundaryIo?: PortIO;
+  /** For external (package) calls: the package the call crosses into. */
+  source?: string;
 }
 
 export interface LaidOutEdge {
@@ -84,18 +86,27 @@ function textW(s: string): number {
   return s.length * CHAR_W;
 }
 
-function sizeNode(label: string, pins: Pin[]): { w: number; h: number } {
+function sizeNode(label: string, pins: Pin[], sublabel?: string): { w: number; h: number } {
   const ins = pins.filter((p) => p.io === "in");
   const outs = pins.filter((p) => p.io === "out");
   const longestIn = Math.max(0, ...ins.map((p) => textW(p.name)));
   const longestOut = Math.max(0, ...outs.map((p) => textW(p.name)));
+  // A sub-line (the package, for external calls) sits under the label; reserve a
+  // little width for it and a second line of height so it never overruns.
+  const subW = sublabel ? textW(sublabel) + PAD_X * 2 : 0;
   const w = Math.max(
     MIN_W,
     textW(label) + PAD_X * 2,
+    subW,
     longestIn + longestOut + PAD_X * 2 + 18,
   );
-  const h = Math.max(MIN_H, Math.max(ins.length, outs.length) * PIN_GAP + PAD_Y * 2);
+  const h = Math.max(MIN_H, Math.max(ins.length, outs.length) * PIN_GAP + PAD_Y * 2) + (sublabel ? 13 : 0);
   return { w: Math.round(w), h: Math.round(h) };
+}
+
+/** The package an external call crosses into, or undefined for any other node. */
+function nodeSource(node: System["modules"][string]["interior"]["nodes"][number]): string | undefined {
+  return node.kind === "function" ? node.source : undefined;
 }
 
 // --- ELK graph construction ----------------------------------------------
@@ -144,7 +155,7 @@ export async function layoutModule(moduleId: string, system: System): Promise<Ca
   for (const node of mod.interior.nodes) {
     const pins = pinsByNode.get(node.id) ?? [];
     const label = nodeLabel(node, system);
-    const { w, h } = sizeNode(label, pins);
+    const { w, h } = sizeNode(label, pins, nodeSource(node));
     const elkPorts: ElkPort[] = pins.map((p) => {
       const id = portId(node.id, p);
       pinInfo.set(id, { ...p, nodeId: node.id });
@@ -270,11 +281,13 @@ function readBack(
     const kind = (irNodeKind.get(child.id) ?? "function") as NodeKind;
     const irNode = mod.interior.nodes.find((n) => n.id === child.id)!;
     const ref = irNodeRef.get(child.id);
+    const source = nodeSource(irNode);
     nodes.push({
       id: child.id,
       kind,
       label: nodeLabel(irNode, system),
       ...(ref !== undefined ? { ref } : {}),
+      ...(source !== undefined ? { source } : {}),
       x: ax,
       y: ay,
       w: child.width ?? 0,
