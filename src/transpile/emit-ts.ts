@@ -88,6 +88,14 @@ function stmt(s: Stmt, indent: string): string[] {
       out.push(`${indent}}`);
       return out;
     }
+    case "try": {
+      const out = [`${indent}try {`];
+      for (const b of s.body) out.push(...stmt(b, indent + "  "));
+      out.push(s.catchParam ? `${indent}} catch (${camel(s.catchParam)}) {` : `${indent}} catch {`);
+      for (const h of s.handler) out.push(...stmt(h, indent + "  "));
+      out.push(`${indent}}`);
+      return out;
+    }
   }
 }
 

@@ -189,6 +189,12 @@ describe("lift: control & collection constructs round-trip (TS)", () => {
       src: "export function makeList(): void {\n  const xs = [1, 2, 3];\n  console.log(xs);\n}\n",
       expectA: "console.log([1, 2, 3]);",
     },
+    {
+      // try/catch → a `try` node; the caught binding flows out as `error`.
+      name: "try/catch → try node",
+      src: "export function risky(n: number): void {\n  try {\n    console.log(n);\n  } catch (e) {\n    console.log(e);\n  }\n}\n",
+      expectA: "} catch (e) {",
+    },
   ];
 
   for (const { name, src, expectA } of cases) {
@@ -218,14 +224,41 @@ describe.skipIf(!hasPython())("lift: Python list comprehension", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python try/except", () => {
+  const SRC = "def risky(n: int) -> None:\n    try:\n        print(n)\n    except Exception as e:\n        print(e)\n";
+
+  it("lifts try/except → try node and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("except Exception as e:");
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+    // The same IR cross-compiles to a TS try/catch.
+    expect(transpile(sys, "ts")).toContain("} catch (e) {");
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
-  it("refuses exception handling (try/catch)", () => {
+  it("refuses raising exceptions (throw) — catching is modelled, raising is not", () => {
     const src = [
       "export function risky(n: number): void {",
-      "  try { console.log(n); } catch (e) { console.log(e); }",
+      "  if ((n < 0)) {",
+      '    throw new Error("negative");',
+      "  }",
+      "  console.log(n);",
       "}",
     ].join("\n");
     expect(() => liftTypeScript(src)).toThrow(/unsupported statement/);
+  });
+
+  it("refuses try/finally (no IR node for finally)", () => {
+    const src = [
+      "export function risky(n: number): void {",
+      "  try { console.log(n); } finally { console.log(0); }",
+      "}",
+    ].join("\n");
+    expect(() => liftTypeScript(src)).toThrow(/try\/finally/);
   });
 
   it("still refuses a return in the middle of a function (non-tail)", () => {

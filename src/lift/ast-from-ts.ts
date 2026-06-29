@@ -108,6 +108,21 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
   if (ts.isWhileStatement(s)) {
     return { t: "while", cond: liftExpr(s.expression, sf), body: block(s.statement, sf) };
   }
+  if (ts.isTryStatement(s)) {
+    // The IR models a single catch-all handler. `finally` is non-local control
+    // flow with no IR node; a try without catch is the same shape — refuse both
+    // rather than silently drop them.
+    if (s.finallyBlock) throw new Error(`lift(ts): unsupported "try/finally" (no IR node for finally)`);
+    if (!s.catchClause) throw new Error(`lift(ts): unsupported "try" without a catch clause`);
+    const decl = s.catchClause.variableDeclaration;
+    const catchParam = decl && ts.isIdentifier(decl.name) ? decl.name.text : undefined;
+    return {
+      t: "try",
+      body: s.tryBlock.statements.map((x) => liftStmt(x, sf)),
+      ...(catchParam ? { catchParam } : {}),
+      handler: s.catchClause.block.statements.map((x) => liftStmt(x, sf)),
+    };
+  }
   if (
     ts.isExpressionStatement(s) &&
     ts.isBinaryExpression(s.expression) &&
