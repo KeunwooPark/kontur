@@ -1,0 +1,76 @@
+{
+  "features": ["login", "search"],
+  "modules": {
+    "userLookup": {
+      "title": "User Lookup",
+      "ports": [
+        { "name": "exec", "type": "exec", "io": "in", "wire": "control" },
+        { "name": "email", "type": "string", "io": "in", "wire": "data" },
+        { "name": "done", "type": "exec", "io": "out", "wire": "control" },
+        { "name": "user", "type": "User", "io": "out", "wire": "data" }
+      ],
+      "interior": {
+        "nodes": [
+          { "id": "q", "kind": "effect", "label": "query users table", "io": "in" }
+        ],
+        "wires": [
+          ["P:exec", "q", "control"],
+          ["P:email", "q", "data"],
+          ["q", "P:done", "control"],
+          ["q", "P:user", "data"]
+        ]
+      }
+    },
+    "login": {
+      "title": "Login",
+      "ports": [
+        { "name": "exec", "type": "exec", "io": "in", "wire": "control" },
+        { "name": "email", "type": "string", "io": "in", "wire": "data" },
+        { "name": "password", "type": "string", "io": "in", "wire": "data" },
+        { "name": "done", "type": "exec", "io": "out", "wire": "control" },
+        { "name": "session", "type": "Session", "io": "out", "wire": "data" }
+      ],
+      "interior": {
+        "nodes": [
+          { "id": "ul", "kind": "module", "ref": "userLookup" },
+          { "id": "chk", "kind": "function", "label": "verify password" },
+          { "id": "mk", "kind": "function", "label": "create session" }
+        ],
+        "wires": [
+          ["P:exec", "ul:exec", "control"],
+          ["P:email", "ul:email", "data"],
+          ["ul:done", "chk", "control"],
+          ["ul:user", "chk", "data"],
+          ["P:password", "chk", "data"],
+          ["chk", "mk", "control"],
+          ["chk", "mk", "data"],
+          ["mk", "P:done", "control"],
+          ["mk", "P:session", "data"]
+        ]
+      }
+    },
+    "search": {
+      "title": "User Search",
+      "ports": [
+        { "name": "exec", "type": "exec", "io": "in", "wire": "control" },
+        { "name": "query", "type": "string", "io": "in", "wire": "data" },
+        { "name": "done", "type": "exec", "io": "out", "wire": "control" },
+        { "name": "results", "type": "UserList", "io": "out", "wire": "data" }
+      ],
+      "interior": {
+        "nodes": [
+          { "id": "ul", "kind": "module", "ref": "userLookup" },
+          { "id": "f", "kind": "function", "label": "filter matches" }
+        ],
+        "wires": [
+          ["P:exec", "ul:exec", "control"],
+          ["P:query", "ul:email", "data"],
+          ["ul:done", "f", "control"],
+          ["ul:user", "f", "data"],
+          ["f", "P:done", "control"],
+          ["f", "P:results", "data"]
+        ]
+      }
+    }
+  }
+}
