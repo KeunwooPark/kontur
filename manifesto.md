@@ -100,7 +100,10 @@ Node =
   | { kind:"while",    label }                 // condition-driven iteration, leaf
   | { kind:"try",      label }                 // protected block; control-outs body/catch/done,
                                                //   data-out "error" (catch-all; no exception type).
-                                               //   label = catch binding name. No throw/raise node.
+                                               //   label = catch binding name.
+  | { kind:"throw",    label }                 // raise an error; data-in "value" = message. TERMINAL
+                                               //   (no control-out: control escapes). The raising
+                                               //   counterpart of try; catch-all, no exception type.
   | { kind:"effect",   label, io }             // side effect / IO, leaf
   | { kind:"const",    label, value }          // literal, leaf
   | { kind:"select",   label }                 // value-level conditional (data mux / ternary)

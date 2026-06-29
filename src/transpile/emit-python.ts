@@ -57,6 +57,10 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}print(${expr(s.arg)})`];
     case "stateSet":
       return [`${indent}self.${snake(s.attr)} = ${expr(s.value)}`];
+    case "throw":
+      // The IR throw is catch-all (no exception type) → a bare `Exception`,
+      // mirroring how the `try` side emits `except Exception`.
+      return [`${indent}raise Exception(${expr(s.arg)})`];
     case "return":
       return [`${indent}return ${expr(s.expr)}`];
     case "returnObject":

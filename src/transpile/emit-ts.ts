@@ -61,6 +61,8 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}console.log(${expr(s.arg)});`];
     case "stateSet":
       return [`${indent}this.${camel(s.attr)} = ${expr(s.value)};`];
+    case "throw":
+      return [`${indent}throw new Error(${expr(s.arg)});`];
     case "return":
       return [`${indent}return ${expr(s.expr)};`];
     case "returnObject":

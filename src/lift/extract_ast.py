@@ -112,6 +112,21 @@ def stmt(s):
         if s.value.func.id == "print":
             return {"t": "print", "arg": expr(s.value.args[0])}
         return {"t": "expr", "expr": expr(s.value)}
+    if isinstance(s, ast.Raise):
+        # The IR models a single catch-all error carrying a message — the raising
+        # counterpart of the catch-all try. Only `raise Exception(<message>)` maps;
+        # a bare re-raise, `from` cause, or typed/custom exception is non-local
+        # control flow we cannot faithfully reproduce, so refuse rather than guess.
+        exc = s.exc
+        if (
+            s.cause is None
+            and isinstance(exc, ast.Call)
+            and isinstance(exc.func, ast.Name)
+            and exc.func.id == "Exception"
+            and len(exc.args) == 1
+        ):
+            return {"t": "throw", "arg": expr(exc.args[0])}
+        raise SystemExit("lift(py): unsupported raise (only `raise Exception(message)` is modelled)")
     if isinstance(s, ast.Try):
         # The IR models a single catch-all handler with no exception type. Refuse
         # finally/else and multiple/typed handlers rather than silently drop the

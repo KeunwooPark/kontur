@@ -195,6 +195,13 @@ describe("lift: control & collection constructs round-trip (TS)", () => {
       src: "export function risky(n: number): void {\n  try {\n    console.log(n);\n  } catch (e) {\n    console.log(e);\n  }\n}\n",
       expectA: "} catch (e) {",
     },
+    {
+      // A guard clause: throw → a terminal `throw` node; the trailing statement
+      // folds into the branch's surviving (else) arm, so the branch stays terminal.
+      name: "throw guard → throw node",
+      src: 'export function risky(n: number): void {\n  if ((n < 0)) {\n    throw new Error("negative");\n  }\n  console.log(n);\n}\n',
+      expectA: 'throw new Error("negative");',
+    },
   ];
 
   for (const { name, src, expectA } of cases) {
@@ -239,17 +246,45 @@ describe.skipIf(!hasPython())("lift: Python try/except", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python raise (throw)", () => {
+  const SRC = "def risky(n: int) -> None:\n    if n < 0:\n        raise Exception(\"negative\")\n    print(n)\n";
+
+  it("lifts raise → throw node and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain('raise Exception("negative")');
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+    // The same IR cross-compiles to a TS throw.
+    expect(transpile(sys, "ts")).toContain('throw new Error("negative");');
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
-  it("refuses raising exceptions (throw) — catching is modelled, raising is not", () => {
+  it("refuses re-raising a caught value (throw e) — only throw new Error(message) is modelled", () => {
     const src = [
       "export function risky(n: number): void {",
+      "  try {",
+      "    console.log(n);",
+      "  } catch (e) {",
+      "    throw e;",
+      "  }",
+      "}",
+    ].join("\n");
+    expect(() => liftTypeScript(src)).toThrow(/unsupported throw/);
+  });
+
+  it("refuses a post-branch merge (statements after a non-escaping branch)", () => {
+    const src = [
+      "export function f(n: number): void {",
       "  if ((n < 0)) {",
-      '    throw new Error("negative");',
+      "    console.log(0);",
       "  }",
       "  console.log(n);",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/unsupported statement/);
+    expect(() => liftTypeScript(src)).toThrow(/control-flow merge/);
   });
 
   it("refuses try/finally (no IR node for finally)", () => {
