@@ -112,7 +112,11 @@ export const Node = z.discriminatedUnion("kind", [
   // marker for a trust-boundary crossing; the import itself is recorded on
   // `System.imports`. `op` and `source` are mutually exclusive (a built-in op is
   // never external). Absent both ⇒ a local helper/stub call.
-  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional() }).strict(),
+  // `kwNames`/`starCount` describe non-positional call args (a stub/external call):
+  // `starCount` `*x` unpacks wired to pins "star0".. ; `kwNames` keyword args wired
+  // to "kw0".. — a string entry is `name=value`, a null entry is `**value`. Plain
+  // positional args stay on the bare endpoint. Absent ⇒ a positional-only call.
+  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string() }).strict(),
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
@@ -252,7 +256,7 @@ export const Node = z.discriminatedUnion("kind", [
   // ambient `self`/`this` — a method calling a sibling on its own object — so a
   // self-call carries no receiver edge, mirroring how `self` is implicit in a
   // method's interior. `label` is the method name, emitted verbatim.
-  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string() }).strict(),
+  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   // Write an attribute of the enclosing class: a control-sequenced effect
   // (`this.attr = …`), with one data in-pin "value". Effects-as-control-nodes.
   z.object({ ...nodeBase, kind: z.literal("stateSet"), label: z.string(), attr: z.string().min(1) }).strict(),

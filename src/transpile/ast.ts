@@ -64,7 +64,12 @@ export type Expr =
    * `recv.name(args)` — and `name` is the method name (emitted verbatim, like an
    * attribute); a `self`/`this` receiver round-trips as the `self` expr.
    */
-  | { t: "call"; name: string; args: Expr[]; recv?: Expr; external?: boolean };
+  | { t: "call"; name: string; args: Expr[]; recv?: Expr; external?: boolean;
+      /** `*x` positional-unpack arguments, in order (`f(*a, *b)`). */
+      starArgs?: Expr[];
+      /** Keyword arguments: `name=value` (name a string) or `**value` dict-unpack
+       *  (name null). Emitted after positional/star args. */
+      kwargs?: { name: string | null; value: Expr }[] };
 
 // `span` is the optional provenance back to source (set by the lifters, ignored
 // by the emitters). Intersected over the union so every statement kind carries it

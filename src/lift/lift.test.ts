@@ -1400,6 +1400,42 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: keyword / star / dstar call args (item 12)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("captures keyword args (previously silently dropped) and round-trips", () => {
+    const { py } = rt("def request(method: str, url: str) -> int:\n    return send(method=method, url=url, timeout=30)\n");
+    expect(py).toContain("send(method=method, url=url, timeout=30)");
+  });
+
+  it("captures *args, **kwargs, and mixed positional/keyword and round-trips", () => {
+    const { py } = rt("def f(args: list, opts: dict) -> int:\n    return go(1, *args, x=2, **opts)\n");
+    expect(py).toContain("go(1, *args, x=2, **opts)");
+  });
+
+  it("captures keyword args on a method call and round-trips", () => {
+    const { py } = rt("def g(s: object) -> str:\n    return s.format(a=1, b=2)\n");
+    expect(py).toContain("s.format(a=1, b=2)");
+  });
+
+  it("cross-compiles *x to a TS spread (one-way)", () => {
+    const sys = liftPython("def f(args: list) -> int:\n    return go(1, *args)\n");
+    expect(transpile(sys, "ts")).toContain("go(1, ...args)");
+  });
+
+  it("refuses *args unpacked into a sibling-function link (deferred)", () => {
+    // A sequenced (statement-position) call to a sibling forms a link; a star
+    // unpack into a link can't map to fixed param ports, so it refuses loudly.
+    expect(() => liftPython("def helper(a: int, b: int) -> int:\n    return a + b\n\ndef caller(xs: list) -> int:\n    r = helper(*xs)\n    return r\n")).toThrow(/unpack into a call/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: exceptions full — typed except / else / finally (item 20)", () => {
   const rt = (src: string) => {
     const sys = liftPython(src);

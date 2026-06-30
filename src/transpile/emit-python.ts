@@ -79,7 +79,14 @@ function expr(e: Expr): string {
     // A method call renders `recv.method(args)` with the method name verbatim; a
     // package call keeps its library API name verbatim; a local stub is cased.
     case "call": {
-      const args = e.args.map(expr).join(", ");
+      // Positional, then `*x` unpacks, then keyword (`name=value`) / `**x` args.
+      // Keyword names are emitted verbatim (they must match the callee's params).
+      const parts = [
+        ...e.args.map(expr),
+        ...(e.starArgs ?? []).map((a) => `*${expr(a)}`),
+        ...(e.kwargs ?? []).map((k) => (k.name === null ? `**${expr(k.value)}` : `${k.name}=${expr(k.value)}`)),
+      ];
+      const args = parts.join(", ");
       if (e.recv) return `${expr(e.recv)}.${e.name}(${args})`;
       return `${e.external ? e.name : snake(e.name)}(${args})`;
     }
