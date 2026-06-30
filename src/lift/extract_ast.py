@@ -38,6 +38,22 @@ def map_type(node):
     return "any"
 
 
+def call_args(e):
+    """The argument structure of a Call: plain positional `args`, `*x` positional
+    unpacks (`starArgs`), and keyword args (`kwargs`: `name=value` as {name,value},
+    `**value` as {name:None,value}). Capturing all three closes a silent-drop hole —
+    keyword/star args were previously ignored, so `f(x=1, **kw)` lifted to `f()`."""
+    args = [expr(a) for a in e.args if not isinstance(a, ast.Starred)]
+    star_args = [expr(a.value) for a in e.args if isinstance(a, ast.Starred)]
+    kwargs = [{"name": k.arg, "value": expr(k.value)} for k in e.keywords]
+    out = {"args": args}
+    if star_args:
+        out["starArgs"] = star_args
+    if kwargs:
+        out["kwargs"] = kwargs
+    return out
+
+
 def unpack_target_names(target):
     """The list of plain names bound by a tuple/list unpack target (`a, b`), or
     None if `target` is not a tuple/list. Only plain names are modelled: a starred
@@ -173,7 +189,7 @@ def expr(e):
     if isinstance(e, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
         return iter_comp(e)
     if isinstance(e, ast.Call) and call_name(e.func) is not None:
-        return {"t": "call", "name": call_name(e.func), "args": [expr(a) for a in e.args]}
+        return {"t": "call", "name": call_name(e.func), **call_args(e)}
     # A method call on a self/local receiver: `recv.method(args)`. The imported-base
     # case (`pkg.fn(...)`) was taken above via call_name; what remains is a receiver
     # we model as a value flowing into the call. A bare imported name as the receiver
@@ -182,7 +198,7 @@ def expr(e):
         root = attr_root(e.func.value)
         if root is not None and root.id in IMPORTED_NAMES:
             raise SystemExit("lift(py): unsupported call on an imported value (package member chain, deferred): " + ast.dump(e.func))
-        return {"t": "call", "name": e.func.attr, "args": [expr(a) for a in e.args], "recv": expr(e.func.value)}
+        return {"t": "call", "name": e.func.attr, **call_args(e), "recv": expr(e.func.value)}
     # A general attribute read `obj.attr` (self.attr was taken above as stateGet).
     # A read off an imported name (`sys.maxsize`) is a package value reference with
     # no receiver wire — a distinct construct, deferred, refused loudly.

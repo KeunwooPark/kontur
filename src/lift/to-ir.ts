@@ -455,6 +455,24 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
   }
 }
 
+/** Node metadata describing a call's non-positional args: `*x` unpacks (starCount,
+ *  wired to "star0".. pins) and keyword args (kwNames, wired to "kw0".. pins; a
+ *  null name is a `**value` dict-unpack). Positional args stay on the bare endpoint. */
+function callArgMeta(e: Extract<Expr, { t: "call" }>): { kwNames?: (string | null)[]; starCount?: number } {
+  const meta: { kwNames?: (string | null)[]; starCount?: number } = {};
+  if (e.starArgs && e.starArgs.length) meta.starCount = e.starArgs.length;
+  if (e.kwargs && e.kwargs.length) meta.kwNames = e.kwargs.map((k) => k.name);
+  return meta;
+}
+
+/** Wire a call's args into a stub/method node `id`: positional → bare endpoint;
+ *  `*x` → "star0".. ; keyword/`**` values → "kw0".. (paralleling callArgMeta). */
+function wireCallArgs(ctx: Ctx, e: Extract<Expr, { t: "call" }>, id: string): void {
+  for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
+  (e.starArgs ?? []).forEach((a, i) => ctx.wires.push([lowerExpr(ctx, a), `${id}:star${i}`, "data"]));
+  (e.kwargs ?? []).forEach((k, i) => ctx.wires.push([lowerExpr(ctx, k.value), `${id}:kw${i}`, "data"]));
+}
+
 /** A call that is sequenced on the control wire: a method, a module link, or a stub. */
 function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: string, prov?: SourceSpan): string {
   // A method call on self/local → a `method` node sequenced in the control flow.
@@ -470,21 +488,28 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     // same-name call carries no `call` (keeps the common case minimal).
     const call = e.name === bareName(link) ? {} : { call: e.name };
     const id = newNode(ctx, { kind: "module", ref: link, ...call }, idHint, prov);
-    // Wire args by the CALLEE's param names (port names on its contract), looked
-    // up by the resolved target id so a cross-file link wires correctly too.
+    // Wire positional args by the CALLEE's param names (port names on its
+    // contract), looked up by the resolved target id so a cross-file link wires
+    // correctly too. A keyword arg `name=value` wires to that named param port; a
+    // `*x`/`**x` unpack into a link can't be mapped to fixed ports (deferred).
+    if (e.starArgs && e.starArgs.length) throw new Error(`lift: unsupported *args unpack into a call to "${e.name}" (deferred)`);
     const params = ctx.moduleParams.get(link) ?? [];
     e.args.forEach((arg, i) => {
       const port = params[i] ?? `arg${i}`;
       ctx.wires.push([lowerExpr(ctx, arg), `${id}:${port}`, "data"]);
     });
+    for (const k of e.kwargs ?? []) {
+      if (k.name === null) throw new Error(`lift: unsupported **kwargs unpack into a call to "${e.name}" (deferred)`);
+      ctx.wires.push([lowerExpr(ctx, k.value), `${id}:${k.name}`, "data"]);
+    }
     return id;
   }
   // Not a link: a local helper/stub, or — if its base name was imported — a call
   // into a package. The latter is tagged with `source` so the diagram shows the
   // trust-boundary crossing.
   const source = externalSource(ctx, e.name);
-  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}) }, idHint, prov);
-  for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
+  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}), ...callArgMeta(e) }, idHint, prov);
+  wireCallArgs(ctx, e, id);
   return id;
 }
 
@@ -646,8 +671,8 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       // Otherwise a nested call in value position → a pure (un-sequenced) stub
       // function, tagged with `source` when it calls into an imported package.
       const source = externalSource(ctx, e.name);
-      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}) });
-      for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
+      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}), ...callArgMeta(e) });
+      wireCallArgs(ctx, e, id);
       return id;
     }
   }
@@ -662,15 +687,17 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
  * neither a link nor a package, and whose base is a bound local, is a method call
  * on that local. (A dotted base that is unbound stays a stub, as before.)
  */
-function methodParts(ctx: Ctx, e: Extract<Expr, { t: "call" }>): { recv: Expr; name: string; args: Expr[] } | null {
-  if (e.recv) return { recv: e.recv, name: e.name, args: e.args };
+function methodParts(ctx: Ctx, e: Extract<Expr, { t: "call" }>): { recv: Expr; call: Extract<Expr, { t: "call" }> } | null {
+  if (e.recv) return { recv: e.recv, call: e };
   if (linkTarget(ctx, e.name) !== undefined) return null;
   if (externalSource(ctx, e.name) !== undefined) return null;
   const dot = e.name.indexOf(".");
   if (dot === -1) return null;
   const base = e.name.slice(0, dot);
   if (!ctx.varMap.has(base)) return null;
-  return { recv: { t: "var", name: base }, name: e.name.slice(dot + 1), args: e.args };
+  // A dotted local `obj.foo(...)` → method `foo` on local `obj`, preserving args.
+  const { recv: _drop, ...rest } = e;
+  return { recv: { t: "var", name: base }, call: { ...rest, name: e.name.slice(dot + 1) } };
 }
 
 /**
@@ -680,10 +707,10 @@ function methodParts(ctx: Ctx, e: Extract<Expr, { t: "call" }>): { recv: Expr; n
  * method's interior. Positional args are wired to the node's bare endpoint, in
  * order, like a stub call's args.
  */
-function lowerMethod(ctx: Ctx, m: { recv: Expr; name: string; args: Expr[] }, idHint?: string, prov?: SourceSpan): string {
-  const id = newNode(ctx, { kind: "method", label: m.name }, idHint, prov);
+function lowerMethod(ctx: Ctx, m: { recv: Expr; call: Extract<Expr, { t: "call" }> }, idHint?: string, prov?: SourceSpan): string {
+  const id = newNode(ctx, { kind: "method", label: m.call.name, ...callArgMeta(m.call) }, idHint, prov);
   if (m.recv.t !== "self") ctx.wires.push([lowerExpr(ctx, m.recv), `${id}:recv`, "data"]);
-  for (const arg of m.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
+  wireCallArgs(ctx, m.call, id);
   return id;
 }
 
@@ -943,7 +970,12 @@ function exprReads(e: Expr, out: Set<string>): void {
     case "attr": exprReads(e.obj, out); break;
     case "index": exprReads(e.obj, out); exprReads(e.key, out); break;
     case "slice": exprReads(e.obj, out); if (e.start) exprReads(e.start, out); if (e.stop) exprReads(e.stop, out); break;
-    case "call": e.args.forEach((a) => exprReads(a, out)); if (e.recv) exprReads(e.recv, out); break;
+    case "call":
+      e.args.forEach((a) => exprReads(a, out));
+      (e.starArgs ?? []).forEach((a) => exprReads(a, out));
+      (e.kwargs ?? []).forEach((k) => exprReads(k.value, out));
+      if (e.recv) exprReads(e.recv, out);
+      break;
     // lit, self, stateGet: no variable reads
   }
 }

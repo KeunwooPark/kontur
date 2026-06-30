@@ -441,7 +441,7 @@ class ModuleCompiler {
           return { t: "un", op: node.op, x: this.resolveInput(node.id, "x") };
         }
         // An external (package) call carries its source; emit its API name verbatim.
-        return { t: "call", name: node.label, args: this.stubArgs(node.id), ...(node.source ? { external: true } : {}) };
+        return { t: "call", name: node.label, ...this.callArgs(node), ...(node.source ? { external: true } : {}) };
       }
       default:
         throw new Error(`node "${node.id}" (kind ${node.kind}) is not an inlinable value`);
@@ -462,11 +462,21 @@ class ModuleCompiler {
     return { t: "call", name: localName(node.ref), args };
   }
 
-  /** Gather every data input wired into a node, in wire order (for stub calls). */
+  /** A stub/method node's positional args: data wires into its BARE endpoint, in
+   *  wire order (named pins — recv, star*, kw* — are excluded by the exact match). */
   private stubArgs(nodeId: string): Expr[] {
     return this.dataWires
-      .filter(([, to]) => endpointNode(to) === nodeId)
+      .filter(([, to]) => to === nodeId)
       .map(([from]) => this.resolveSrc(from));
+  }
+
+  /** Reconstruct a call's full arg structure from a node: positional (bare), `*x`
+   *  unpacks ("star0".. via starCount), and keyword/`**` args ("kw0".. via kwNames). */
+  private callArgs(node: Extract<Node, { kind: "function" | "method" }>): Pick<Extract<Expr, { t: "call" }>, "args" | "starArgs" | "kwargs"> {
+    const out: Pick<Extract<Expr, { t: "call" }>, "args" | "starArgs" | "kwargs"> = { args: this.stubArgs(node.id) };
+    if (node.starCount) out.starArgs = Array.from({ length: node.starCount }, (_, i) => this.resolveInput(node.id, `star${i}`));
+    if (node.kwNames) out.kwargs = node.kwNames.map((name, i) => ({ name, value: this.resolveInput(node.id, `kw${i}`) }));
+    return out;
   }
 
   /** Reconstruct a method call from a `method` node: the receiver is the wired
@@ -476,15 +486,7 @@ class ModuleCompiler {
     const recv: Expr = this.dataSrc.has(`${node.id}:recv`)
       ? this.resolveInput(node.id, "recv")
       : { t: "self" };
-    return { t: "call", name: node.label, args: this.positionalArgs(node.id), recv };
-  }
-
-  /** A method node's positional args: data wires into its BARE endpoint (the
-   *  named "recv" pin is excluded), in wire order. */
-  private positionalArgs(nodeId: string): Expr[] {
-    return this.dataWires
-      .filter(([, to]) => to === nodeId)
-      .map(([from]) => this.resolveSrc(from));
+    return { t: "call", name: node.label, ...this.callArgs(node), recv };
   }
 
   /** Resolve a named input pin of a node to an expression. */

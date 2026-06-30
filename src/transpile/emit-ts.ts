@@ -96,7 +96,15 @@ function expr(e: Expr): string {
     // package call keeps its library API name verbatim (no re-casing, dotted
     // member access preserved); a local helper/stub is cased like any identifier.
     case "call": {
-      const args = e.args.map(expr).join(", ");
+      // TS has no keyword args; cross-compile ONE-WAY — `*x`/`**x` unpacks become
+      // spreads, a `name=value` keyword arg passes its value positionally (name
+      // dropped). A Python-only construct, so the TS lifter never produces these.
+      const parts = [
+        ...e.args.map(expr),
+        ...(e.starArgs ?? []).map((a) => `...${expr(a)}`),
+        ...(e.kwargs ?? []).map((k) => (k.name === null ? `...${expr(k.value)}` : expr(k.value))),
+      ];
+      const args = parts.join(", ");
       if (e.recv) return `${expr(e.recv)}.${e.name}(${args})`;
       return `${e.external ? e.name : camel(e.name)}(${args})`;
     }
