@@ -138,6 +138,13 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}${expr(s.obj)}[${expr(s.key)}] = ${expr(s.value)};`];
     case "destructure":
       return [`${indent}const [${s.names.map(camel).join(", ")}] = ${expr(s.value)};`];
+    case "chain": {
+      // `x = y = z` has no single-statement strict-mode TS form (an inner
+      // assignment target must be declared); cross-compile ONE-WAY to a first
+      // binding plus aliases, evaluating the value once.
+      const cs = s.names.map(camel);
+      return [`${indent}let ${cs[0]} = ${expr(s.value)};`, ...cs.slice(1).map((n) => `${indent}let ${n} = ${cs[0]};`)];
+    }
     case "throw":
       // Absent errorType ⇒ the catch-all `Error`; a named type emits that
       // constructor (`throw new TypeError(...)`).

@@ -1288,8 +1288,12 @@ describe.skipIf(!hasPython())("lift: tuple unpacking assignment (item 14, Python
     expect(ts).toContain("const [a, b] = parse(url);");
   });
 
-  it("refuses chained assignment `x = y = z` (deferred)", () => {
-    expect(() => liftPython("def g(z: int) -> int:\n    x = y = z\n    return x\n")).toThrow(/chained assignment/);
+  it("lifts chained assignment `x = y = z` (item 14C) — value evaluated once, round-trips", () => {
+    const { sys, py } = rt("def g(z: int) -> int:\n    x = y = compute(z)\n    return x + y\n");
+    expect(py).toContain("x = y = compute(z)");
+    expect((py.match(/compute/g) ?? []).length).toBe(1); // evaluated once
+    expect(nodeKinds(sys, "g")).toContain("broadcast");
+    expect(transpile(sys, "ts")).toContain("let y = x;");
   });
 
   it("refuses a starred unpack target `a, *rest = xs` (deferred)", () => {

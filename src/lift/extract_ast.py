@@ -292,11 +292,13 @@ def _stmt(s):
         return {"t": "stateSet", "attr": s.targets[0].attr, "value": expr(s.value)}
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
         return {"t": "let", "name": s.targets[0].id, "expr": expr(s.value)}
-    # Chained assignment `x = y = z` binds several targets to one value. No IR node
-    # carries that broadcast yet (the unpack node below destructures one value into
-    # element-wise parts, not the whole value into several names), so refuse it.
+    # Chained assignment `x = y = z` binds one value to several names (broadcast).
+    # Only plain-name targets are modelled (an attribute/subscript chain target is
+    # rarer and refused). The value is evaluated once via the `broadcast` node.
     if isinstance(s, ast.Assign) and len(s.targets) > 1:
-        raise SystemExit("lift(py): unsupported chained assignment (`x = y = z`, deferred)")
+        if all(isinstance(t, ast.Name) for t in s.targets):
+            return {"t": "chain", "names": [t.id for t in s.targets], "value": expr(s.value)}
+        raise SystemExit("lift(py): unsupported chained assignment target (only plain names)")
     # Sequence unpacking `a, b = value` (a tuple/list target). Each name binds to
     # the corresponding element of `value` -> a `destructure` (the `unpack` node).
     # Only plain names are modelled: a starred target (`a, *rest = …`) or a nested
