@@ -161,7 +161,7 @@ class ModuleCompiler {
     // Emit under the module's bare local name: the project driver qualifies ids
     // by path (`src/util#format`), but the function declaration uses the bare
     // name. For single-file lifts the id is already bare, so this is the id.
-    return { name: localName(this.id), params, returns, body, ...(this.mod.decorators && this.mod.decorators.length ? { decorators: this.mod.decorators } : {}), ...(this.mod.doc !== undefined ? { doc: this.mod.doc } : {}) };
+    return { name: localName(this.id), params, returns, body, ...(this.mod.async ? { async: true } : {}), ...(this.mod.decorators && this.mod.decorators.length ? { decorators: this.mod.decorators } : {}), ...(this.mod.doc !== undefined ? { doc: this.mod.doc } : {}) };
   }
 
   /** Walk the control chain starting at `target`, producing statements. */
@@ -417,6 +417,8 @@ class ModuleCompiler {
       }
       case "index":
         return { t: "index", obj: this.resolveInput(node.id, "obj"), key: this.resolveInput(node.id, "key") };
+      case "await":
+        return { t: "await", value: this.resolveInput(node.id, "x") };
       case "slice": {
         // Each bound is present only when its pin is wired (an absent bound is an
         // open slice end, `obj[:3]` / `obj[1:]`).

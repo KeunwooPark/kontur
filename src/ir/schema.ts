@@ -185,6 +185,10 @@ export const Node = z.discriminatedUnion("kind", [
   // nodes (early, per-branch, nested in a with/loop); each wires its value to the
   // function's data out-port, and only one fires at runtime. `label` is "return".
   z.object({ ...nodeBase, kind: z.literal("return"), label: z.string() }).strict(),
+  // Await an awaitable (`await x`). A pure value transform: data-in "x", one
+  // data-out (the resolved value). Valid only inside an async module. `label` is
+  // "await".
+  z.object({ ...nodeBase, kind: z.literal("await"), label: z.string() }).strict(),
   // Yield a value from a generator. A control-sequenced effect (control-in/out),
   // data-in "value" (absent for a bare `yield`); NOT terminal — a yield suspends
   // and resumes, so control continues. `delegate` marks `yield from` (delegating
@@ -345,6 +349,9 @@ export const Module = z
      * it has no node and no wire. Absent ⇒ the source carried no doc.
      */
     doc: z.string().optional(),
+    /** When true, the module is an `async` function/method (Python `async def` /
+     *  TS `async function`). Its body may `await`. */
+    async: z.boolean().optional(),
     /** Provenance for the module as a whole (e.g. a function/method/class def). */
     prov: SourceSpan.optional(),
     /**

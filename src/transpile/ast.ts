@@ -64,6 +64,9 @@ export type Expr =
    * `recv.name(args)` — and `name` is the method name (emitted verbatim, like an
    * attribute); a `self`/`this` receiver round-trips as the `self` expr.
    */
+  /** Await an awaitable: `await value` (only inside an async function). A pure
+   *  value transform — the awaited result flows out. */
+  | { t: "await"; value: Expr }
   | { t: "call"; name: string; args: Expr[]; recv?: Expr; external?: boolean;
       /** `*x` positional-unpack arguments, in order (`f(*a, *b)`). */
       starArgs?: Expr[];
@@ -200,6 +203,9 @@ export interface Fn {
   body: Stmt[];
   /** When true, emit as a class method (no `export function`, `self`/`this`). */
   isMethod?: boolean;
+  /** When true, the function is `async` (Python `async def` / TS `async function`),
+   *  enabling `await` in its body. */
+  async?: boolean;
   /**
    * Decorators applied to the function/method, outermost first — each the
    * decorator expression carried VERBATIM without its leading `@` (`property`,

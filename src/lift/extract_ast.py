@@ -186,6 +186,8 @@ def expr(e):
             "to": range_stop_to(stop),
             "elem": expr(e.elt),
         }
+    if isinstance(e, ast.Await):
+        return {"t": "await", "value": expr(e.value)}
     if isinstance(e, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
         return iter_comp(e)
     if isinstance(e, ast.Call) and call_name(e.func) is not None:
@@ -619,6 +621,8 @@ def func(f, is_method=False):
         out["doc"] = doc
     if is_method:
         out["isMethod"] = True
+    if isinstance(f, ast.AsyncFunctionDef):
+        out["async"] = True
     sp = span(f)
     if sp is not None:
         out["span"] = sp
@@ -658,7 +662,7 @@ def klass(c):
     for n in body:
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
             fields.append({"name": n.target.id, "type": map_type(n.annotation)})
-        elif isinstance(n, ast.FunctionDef):
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
             methods.append(func(n, is_method=True))
         elif isinstance(n, ast.Pass):
             continue
@@ -713,6 +717,6 @@ def imports_of(tree):
 tree = ast.parse(sys.stdin.read())
 imports = imports_of(tree)
 IMPORTED_NAMES = {b["local"] for imp in imports for b in imp["bindings"]}
-functions = [func(n) for n in tree.body if isinstance(n, ast.FunctionDef)]
+functions = [func(n) for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 classes = [klass(n) for n in tree.body if isinstance(n, ast.ClassDef)]
 print(json.dumps({"functions": functions, "classes": classes, "imports": imports}))
