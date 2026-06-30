@@ -9,7 +9,8 @@ import sys
 
 TYPE_MAP = {"int": "int", "float": "float", "str": "string", "bool": "bool"}
 BINOP = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div", ast.Mod: "mod"}
-CMP = {ast.Eq: "eq", ast.NotEq: "ne", ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge"}
+CMP = {ast.Eq: "eq", ast.NotEq: "ne", ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge",
+       ast.Is: "is", ast.IsNot: "isnot", ast.In: "in", ast.NotIn: "notin"}
 # Prefix unary operators sharing the `un` node: logical `not`, arithmetic `-`/`+`,
 # bitwise `~`. All round-trip through both emitters (`-x`, `+x`, `~x`, `not x`).
 UNARYOP = {ast.Not: "not", ast.USub: "neg", ast.UAdd: "pos", ast.Invert: "bitnot"}

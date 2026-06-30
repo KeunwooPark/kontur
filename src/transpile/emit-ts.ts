@@ -5,7 +5,11 @@ import { camel, pascal } from "./naming.js";
 
 const BIN: Partial<Record<Op, string>> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%",
+  // `is`/`is not` (identity) have no TS form; cross-compile to the closest infix
+  // `===`/`!==`. Membership (`in`/`not in`) is handled separately in `expr` since
+  // its closest TS form (`.includes()`) is not infix.
   eq: "===", ne: "!==", lt: "<", le: "<=", gt: ">", ge: ">=",
+  is: "===", isnot: "!==",
   and: "&&", or: "||", concat: "+",
 };
 
@@ -44,7 +48,14 @@ function expr(e: Expr): string {
     // surface), recursing into the receiver.
     case "attr": return `${expr(e.obj)}.${e.name}`;
     case "stateGet": return `this.${camel(e.attr)}`;
-    case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
+    // Membership cross-compiles one-way to `.includes()` (best-effort: correct for
+    // arrays/strings, the common case); `not in` negates it. Other binary ops are
+    // plain infix via the BIN map.
+    case "bin": {
+      if (e.op === "in") return `(${expr(e.b)}.includes(${expr(e.a)}))`;
+      if (e.op === "notin") return `(!${expr(e.b)}.includes(${expr(e.a)}))`;
+      return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
+    }
     case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.cond)} ? ${expr(e.then)} : ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;

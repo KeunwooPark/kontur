@@ -6,6 +6,7 @@ import { pascal, snake } from "./naming.js";
 const BIN: Partial<Record<Op, string>> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%",
   eq: "==", ne: "!=", lt: "<", le: "<=", gt: ">", ge: ">=",
+  is: "is", isnot: "is not", in: "in", notin: "not in",
   and: "and", or: "or", concat: "+",
 };
 
