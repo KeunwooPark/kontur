@@ -172,6 +172,12 @@ export const Node = z.discriminatedUnion("kind", [
   // `label` is always "break" / "continue".
   z.object({ ...nodeBase, kind: z.literal("break"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("continue"), label: z.string() }).strict(),
+  // Return a value from the function (`return E`). Like `throw`, it is TERMINAL —
+  // control-in, one data-in "value", NO control-out — so the chain dead-ends here
+  // (control leaves the function). MULTI-EXIT: a function may have several `return`
+  // nodes (early, per-branch, nested in a with/loop); each wires its value to the
+  // function's data out-port, and only one fires at runtime. `label` is "return".
+  z.object({ ...nodeBase, kind: z.literal("return"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in

@@ -142,13 +142,20 @@ class ModuleCompiler {
       ? this.flowFrom(this.controlTargetFrom(`P:${entryPort.name}`))
       : [];
 
-    if (returns.length === 1) {
-      body.push({ t: "return", expr: this.resolveBoundaryOut(returns[0]!.name) });
-    } else if (returns.length > 1) {
-      body.push({
-        t: "returnObject",
-        fields: returns.map((r) => ({ name: r.name, expr: this.resolveBoundaryOut(r.name) })),
-      });
+    // Returns are explicit terminal `return` nodes (multi-exit), so the body the
+    // control walk produced already carries them. Only append a tail return when
+    // the body falls through (no terminal return/escape on the last path) yet the
+    // function still declares an out-port — the legacy single-capture / multi-output
+    // shape where the value reaches the boundary without a dedicated return node.
+    if (returns.length >= 1 && !endsTerminal(body)) {
+      if (returns.length === 1) {
+        body.push({ t: "return", expr: this.resolveBoundaryOut(returns[0]!.name) });
+      } else {
+        body.push({
+          t: "returnObject",
+          fields: returns.map((r) => ({ name: r.name, expr: this.resolveBoundaryOut(r.name) })),
+        });
+      }
     }
 
     // Emit under the module's bare local name: the project driver qualifies ids
@@ -272,6 +279,14 @@ class ModuleCompiler {
       if (node.kind === "break" || node.kind === "continue") {
         // Terminal loop escape: the chain dead-ends here, like a branch arm.
         stmts.push({ t: node.kind });
+        return stmts;
+      }
+
+      if (node.kind === "return") {
+        // Terminal: a function exit. A value return carries its "value" data-in; a
+        // bare (void) return has no value wire. The chain dead-ends here.
+        const hasValue = this.dataSrc.has(`${node.id}:value`);
+        stmts.push(hasValue ? { t: "return", expr: this.resolveInput(node.id, "value") } : { t: "return" });
         return stmts;
       }
 
@@ -552,6 +567,20 @@ class ModuleCompiler {
   private controlNext(nodeId: string): string | undefined {
     return this.controlWires.find(([from]) => endpointNode(from) === nodeId)?.[1];
   }
+}
+
+/** Does this reconstructed block end in a statement that escapes control (so no
+ *  tail return should be appended)? A return/throw/rethrow/break/continue, or a
+ *  branch whose every arm escapes. */
+function endsTerminal(stmts: Stmt[]): boolean {
+  const last = stmts[stmts.length - 1];
+  if (!last) return false;
+  if (last.t === "return" || last.t === "returnObject" || last.t === "throw" || last.t === "rethrow" || last.t === "break" || last.t === "continue") return true;
+  if (last.t === "if") return endsTerminal(last.then) && endsTerminal(last.else);
+  // A with's body always runs; a try escapes only if both body and handler do.
+  if (last.t === "with") return endsTerminal(last.body);
+  if (last.t === "try") return endsTerminal(last.body) && endsTerminal(last.handler);
+  return false;
 }
 
 /** The bare local name of a (possibly path-qualified) module id: `src/util#format` → `format`. */

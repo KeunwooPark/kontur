@@ -1396,6 +1396,53 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: early/branch returns — multi-exit (item 18)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const returns = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.filter((n) => n.kind === "return").length;
+
+  it("lifts a guard clause with a side effect before the early return", () => {
+    // Cannot collapse to a `cond` (the then-arm has an effect); needs real multi-exit.
+    const { sys, py } = rt("def f(x: int) -> int:\n    if x < 0:\n        log(x)\n        return 0\n    return x\n");
+    expect(returns(sys, "f")).toBe(2);
+    expect(py).toContain("return 0");
+    expect(py).toContain("return x");
+  });
+
+  it("lifts an early return from inside a loop", () => {
+    const { sys, py } = rt("def find(items: list, target: int) -> int:\n    for x in items:\n        if x == target:\n            return x\n    return -1\n");
+    expect(returns(sys, "find")).toBe(2);
+    expect(py).toContain("return x");
+    expect(py).toContain("return (-1)");
+  });
+
+  it("lifts a return nested in a with (the api.py shape) — no done port, no duplicate", () => {
+    const { sys, py } = rt("def request(method: str, url: str) -> int:\n    with make_session() as session:\n        return send(session, method, url)\n");
+    expect(returns(sys, "request")).toBe(1);
+    expect(sys.modules["request"]!.ports.some((p) => p.name === "done")).toBe(false);
+    expect(py).toContain("with make_session() as session:");
+    expect((py.match(/return send/g) ?? []).length).toBe(1);
+  });
+
+  it("lifts a return inside a try/except (both arms return)", () => {
+    const { sys } = rt("def g(x: int) -> int:\n    try:\n        return risky(x)\n    except Exception as e:\n        return fallback(e)\n");
+    expect(returns(sys, "g")).toBe(2);
+    expect(sys.modules["g"]!.ports.some((p) => p.name === "done")).toBe(false);
+  });
+
+  it("a value return wires to the out-port; callers still sequence (no done needed)", () => {
+    const { py } = rt("def add(a: int, b: int) -> int:\n    return a + b\n\ndef run(x: int) -> int:\n    y = add(x, 1)\n    z = add(y, 2)\n    return z\n");
+    expect(py).toContain("y = add(x, 1)");
+    expect(py).toContain("z = add(y, 2)");
+  });
+});
+
 describe.skipIf(!hasPython())("lift: break / continue (item 17)", () => {
   const nodeKinds = (sys: System, modId: string) =>
     sys.modules[modId]!.interior.nodes.map((n) => n.kind);
@@ -1690,14 +1737,22 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(transpile(sys, "ts")).toContain("for (const [a, b] of pairs) {");
   });
 
-  it("still refuses a return in the middle of a function (non-tail)", () => {
+  it("lifts a guarded early return (multi-exit, item 18) and round-trips from TS", () => {
     const src = [
       "export function f(x: number): number {",
+      "  if (x < 0) {",
+      "    console.log(x);",
+      "    return 0;",
+      "  }",
       "  return x;",
-      "  console.log(x);",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/early\/branch return/);
+    const sys = liftTypeScript(src);
+    expect(sys.modules["f"]!.interior.nodes.filter((n) => n.kind === "return").length).toBe(2);
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("return 0;");
+    expect(ts).toContain("return x;");
+    expect(transpile(liftTypeScript(ts), "ts")).toBe(ts); // fixed point
   });
 });
 
@@ -1780,9 +1835,14 @@ describe.skipIf(!hasPython())("lift: method & attribute access on self/locals (P
     expect(() => liftPython(src)).toThrow();
   });
 
-  it("refuses a bare `return` (early exit, not yet modelled)", () => {
-    const src = "def f(x: int) -> None:\n    if (x > 0):\n        return\n    print(x)\n";
-    expect(() => liftPython(src)).toThrow();
+  it("lifts a bare `return` (void early exit, item 18) and round-trips", () => {
+    const src = "def f(x: int) -> None:\n    if x > 0:\n        do(x)\n        return\n    other(x)\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["f"]!.interior.nodes.filter((n) => n.kind === "return").length).toBe(1);
+    const py = transpile(sys, "python");
+    expect(py).toMatch(/\breturn\b/);
+    expect(transpile(liftPython(py), "python")).toBe(py);
   });
 });
 
