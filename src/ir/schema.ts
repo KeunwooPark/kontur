@@ -279,6 +279,10 @@ export const Node = z.discriminatedUnion("kind", [
   // separate `obj[i]` binds. `names` are the target identifiers in order; there
   // is no `label` (cf. `module`). Round-trips in both backends.
   z.object({ ...nodeBase, kind: z.literal("unpack"), names: z.array(z.string().min(1)).min(2) }).strict(),
+  // Chained assignment `x = y = z`: one value (data-in "value") broadcast to N
+  // names (≥2), each on a data-out "0".."n-1" carrying the WHOLE value (unlike
+  // `unpack`, which carries element i). The value is evaluated once.
+  z.object({ ...nodeBase, kind: z.literal("broadcast"), names: z.array(z.string().min(1)).min(2) }).strict(),
 ]);
 
 /**

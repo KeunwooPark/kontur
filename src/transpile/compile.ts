@@ -325,6 +325,13 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "broadcast") {
+        // Chained assignment: the value (resolved once) bound to every name.
+        stmts.push({ t: "chain", names: node.names, value: this.resolveInput(node.id, "value") });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "unpack") {
         // Sequence unpacking: the value (resolved once) destructured into the
         // bound names; each out-port read resolves back to its name in resolveSrc.
@@ -536,6 +543,10 @@ class ModuleCompiler {
     }
     // An unpack node's element out-port "i" → the i-th destructured name.
     if (src.kind === "unpack" && ep.port !== undefined) {
+      return { t: "var", name: src.names[Number(ep.port)] ?? src.id };
+    }
+    // A broadcast node's out-port "i" → the i-th chained name (all hold the value).
+    if (src.kind === "broadcast" && ep.port !== undefined) {
       return { t: "var", name: src.names[Number(ep.port)] ?? src.id };
     }
     if (this.hasControlIn.has(src.id)) {

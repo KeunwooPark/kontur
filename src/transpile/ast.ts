@@ -90,6 +90,10 @@ export type Stmt = { span?: SourceSpan } & (
    *  names (a single target is a plain `let`); starred / nested targets are
    *  refused at lift. */
   | { t: "destructure"; names: string[]; value: Expr }
+  /** Chained assignment: `x = y = z` — one value bound to several names (≥2),
+   *  evaluated once. Distinct from `destructure` (which splits a sequence into
+   *  element-wise parts); here every name gets the WHOLE value. */
+  | { t: "chain"; names: string[]; value: Expr }
   | { t: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
   /** Inclusive counted loop: `for v in from..to`. */
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }
