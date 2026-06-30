@@ -28,6 +28,8 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "while", glyph: "⟲", label: "while loop" },
   { kind: "foreach", glyph: "∈", label: "for-each loop" },
   { kind: "try", glyph: "⛨", label: "try — protected block" },
+  { kind: "with", glyph: "⊏⊐", label: "with — context-managed block" },
+  { kind: "assert", glyph: "‼", label: "assert" },
   { kind: "throw", glyph: "↯", label: "throw — raise / escape" },
   { kind: "rethrow", glyph: "⤴", label: "rethrow — re-raise a value" },
   { kind: "effect", glyph: "▮", label: "effect" },
@@ -125,6 +127,8 @@ export const paper: Theme = {
     while: { fill: "#e3f1fb", stroke: "#56b4e9" }, // sky blue — the other loop
     foreach: { fill: "#eef6e2", stroke: "#5a9216" }, // olive green — the collection loop
     try: { fill: "#f7ddd9", stroke: "#b23a2e" }, // brick red — protected/recovery
+    with: { fill: "#f7e6da", stroke: "#b2682e" }, // warm brown — context-managed block (try-adjacent)
+    assert: { fill: "#fbe7d9", stroke: "#c17a12" }, // ochre — a guard/check effect
     throw: { fill: "#fbd9de", stroke: "#c1121f" }, // crimson — the raise/escape sibling of try
     rethrow: { fill: "#fbe3e0", stroke: "#a01a2e" }, // deep crimson — re-raise an existing value
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
@@ -177,6 +181,8 @@ export const ink: Theme = {
     while: { fill: "#13283a", stroke: "#56b4e9" },
     foreach: { fill: "#1c2f12", stroke: "#7fb84a" },
     try: { fill: "#3a1714", stroke: "#e0584a" },
+    with: { fill: "#3a2814", stroke: "#e0904a" },
+    assert: { fill: "#3a2810", stroke: "#d0973a" },
     throw: { fill: "#3a1218", stroke: "#f0556a" },
     rethrow: { fill: "#3a141c", stroke: "#f07a88" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },

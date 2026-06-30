@@ -133,6 +133,20 @@ export const Node = z.discriminatedUnion("kind", [
   // handler reads it. `label` is the catch binding name (like a loop's index var),
   // or "" when the source binds no variable. Its raising counterpart is `throw`.
   z.object({ ...nodeBase, kind: z.literal("try"), label: z.string() }).strict(),
+  // A context-managed block (`with ctx as r: …`). Control-in enters; data-in
+  // "context" is the context-manager expression; data-out "resource" is the bound
+  // value (read inside the body), wired only when the source has an `as` clause;
+  // control-out "body" runs the block and "done" continues after the manager
+  // exits. `label` is the resource binding name (like a loop's index / a try's
+  // catch var), or "" when there is no `as`. Python-faithful; TS emits a `using`
+  // disposable block one-way (the TS lifter never produces it).
+  z.object({ ...nodeBase, kind: z.literal("with"), label: z.string() }).strict(),
+  // An assertion (`assert cond, message`). A control-sequenced effect: control-in
+  // enters, control-out "done" continues (it falls through when the predicate
+  // holds, raises otherwise). Data-in "cond" is the predicate; optional data-in
+  // "message" is the failure message. No data-out. `label` is always "assert".
+  // Python-faithful; TS emits `console.assert(...)` one-way.
+  z.object({ ...nodeBase, kind: z.literal("assert"), label: z.string() }).strict(),
   // Raise an exception. Control-in enters; one data-in "value" is the message.
   // There is NO control-out: control leaves the visible graph (non-local), so the
   // node is TERMINAL — drawn as a dead-end, the honest picture of an escape. It is
