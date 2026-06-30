@@ -269,6 +269,12 @@ class ModuleCompiler {
         return stmts;
       }
 
+      if (node.kind === "break" || node.kind === "continue") {
+        // Terminal loop escape: the chain dead-ends here, like a branch arm.
+        stmts.push({ t: node.kind });
+        return stmts;
+      }
+
       if (node.kind === "stateSet") {
         stmts.push({ t: "stateSet", attr: node.attr, value: this.resolveInput(node.id, "value") });
         cur = this.controlNext(node.id);

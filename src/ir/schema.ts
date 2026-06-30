@@ -165,6 +165,13 @@ export const Node = z.discriminatedUnion("kind", [
   // UNCHANGED (`throw e` / `raise e`). The catch-all IR carries the value as-is —
   // typically a `try` node's caught-error binding wired straight into "value".
   z.object({ ...nodeBase, kind: z.literal("rethrow"), label: z.string() }).strict(),
+  // Loop escape: `break` exits the nearest enclosing loop, `continue` skips to its
+  // next iteration. Like `throw`, both are TERMINAL — control-in, NO control-out,
+  // no data — so the chain dead-ends (control leaves the visible block). Which loop
+  // they target is implicit in their lexical position, exactly as in source.
+  // `label` is always "break" / "continue".
+  z.object({ ...nodeBase, kind: z.literal("break"), label: z.string() }).strict(),
+  z.object({ ...nodeBase, kind: z.literal("continue"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in

@@ -452,6 +452,10 @@ def _stmt(s):
                 raise SystemExit("lift(py): unsupported with-target (only a single `as name`, not unpacking)")
             out["resource"] = item.optional_vars.id
         return out
+    if isinstance(s, ast.Break):
+        return {"t": "break"}
+    if isinstance(s, ast.Continue):
+        return {"t": "continue"}
     if isinstance(s, ast.Assert):
         # `assert cond` / `assert cond, message` — a control-sequenced effect node.
         out = {"t": "assert", "cond": expr(s.test)}

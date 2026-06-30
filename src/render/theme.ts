@@ -32,6 +32,8 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "assert", glyph: "‼", label: "assert" },
   { kind: "throw", glyph: "↯", label: "throw — raise / escape" },
   { kind: "rethrow", glyph: "⤴", label: "rethrow — re-raise a value" },
+  { kind: "break", glyph: "⤓", label: "break — exit loop" },
+  { kind: "continue", glyph: "↺", label: "continue — next iteration" },
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
   { kind: "select", glyph: "⋔", label: "select — value conditional" },
@@ -131,6 +133,8 @@ export const paper: Theme = {
     assert: { fill: "#fbe7d9", stroke: "#c17a12" }, // ochre — a guard/check effect
     throw: { fill: "#fbd9de", stroke: "#c1121f" }, // crimson — the raise/escape sibling of try
     rethrow: { fill: "#fbe3e0", stroke: "#a01a2e" }, // deep crimson — re-raise an existing value
+    break: { fill: "#f7eef0", stroke: "#a05a72" }, // muted plum — loop escape (loop-adjacent)
+    continue: { fill: "#f7eef0", stroke: "#a05a72" }, // muted plum — loop escape
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
     select: { fill: "#f6ead0", stroke: "#a86b00" }, // deep amber — a data conditional
@@ -185,6 +189,8 @@ export const ink: Theme = {
     assert: { fill: "#3a2810", stroke: "#d0973a" },
     throw: { fill: "#3a1218", stroke: "#f0556a" },
     rethrow: { fill: "#3a141c", stroke: "#f07a88" },
+    break: { fill: "#2e1c26", stroke: "#c07a98" },
+    continue: { fill: "#2e1c26", stroke: "#c07a98" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
     select: { fill: "#33270f", stroke: "#d09a3a" },

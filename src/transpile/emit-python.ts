@@ -179,6 +179,8 @@ function stmt(s: Stmt, indent: string): string[] {
     case "assert": {
       return [`${indent}assert ${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""}`];
     }
+    case "break": return [`${indent}break`];
+    case "continue": return [`${indent}continue`];
   }
 }
 

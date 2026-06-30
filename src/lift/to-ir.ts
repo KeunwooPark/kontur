@@ -390,6 +390,14 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return null;
     }
+    case "break":
+    case "continue": {
+      // A terminal control node, like throw/rethrow: control-in, no control-out —
+      // the chain dead-ends (control escapes to the loop header / past the loop).
+      const id = newNode(ctx, { kind: s.t, label: s.t }, undefined, s.span);
+      ctx.wires.push([prev, id, "control"]);
+      return null;
+    }
     case "return": {
       ctx.returnSource = lowerExpr(ctx, s.expr);
       return prev;
@@ -706,7 +714,7 @@ function foldNested(s: Stmt): Stmt {
 function isTerminal(stmts: Stmt[]): boolean {
   const last = stmts[stmts.length - 1];
   if (!last) return false; // empty block falls through
-  if (last.t === "throw" || last.t === "rethrow") return true;
+  if (last.t === "throw" || last.t === "rethrow" || last.t === "break" || last.t === "continue") return true;
   // A branch escapes only if BOTH arms do; an empty/missing else falls through.
   if (last.t === "if") return isTerminal(last.then) && isTerminal(last.else);
   return false;
