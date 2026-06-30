@@ -294,14 +294,34 @@ def func(f, is_method=False):
     return out
 
 
+def dotted_name(node):
+    """The dotted identifier of a Name/Attribute chain (`Base`, `abc.ABC`,
+    `collections.abc.MutableMapping`), or None for any other expression."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = dotted_name(node.value)
+        if base is not None:
+            return base + "." + node.attr
+    return None
+
+
 def klass(c):
-    # Bases (inheritance) and class decorators are real system structure the IR
-    # does not yet carry; refuse them loudly instead of silently flattening the
-    # class to a bare one (roadmap items 5 & 6).
-    if c.bases or c.keywords:
-        raise SystemExit("lift(py): unsupported class base/inheritance (not yet in the IR)")
+    # Positional base classes ARE captured now (roadmap item 5): each is a name or
+    # dotted name re-emitted verbatim, like any other type identifier (cf. throw's
+    # `errorType`). Keyword bases (e.g. `metaclass=`) and class decorators are real
+    # structure the IR does not yet carry; refuse them loudly (decorators are
+    # roadmap item 6) instead of silently flattening the class.
+    if c.keywords:
+        raise SystemExit("lift(py): unsupported class keyword base (e.g. metaclass=, not yet in the IR)")
     if c.decorator_list:
         raise SystemExit("lift(py): unsupported class decorator (not yet in the IR)")
+    bases = []
+    for b in c.bases:
+        name = dotted_name(b)
+        if name is None:
+            raise SystemExit("lift(py): unsupported base class expression (only a name or dotted name is modelled, not e.g. Generic[T])")
+        bases.append(name)
     fields = []
     methods = []
     doc, body = docstring_of(c.body)
@@ -315,6 +335,8 @@ def klass(c):
         else:
             raise SystemExit("lift(py): unsupported class member: " + ast.dump(n))
     out = {"name": c.name, "fields": fields, "methods": methods}
+    if bases:
+        out["bases"] = bases
     if doc is not None:
         out["doc"] = doc
     sp = span(c)

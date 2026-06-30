@@ -251,9 +251,17 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
     expect(() => liftPython(src)).toThrow(/default value/);
   });
 
-  it("refuses class inheritance (base class)", () => {
-    const src = "class C(Base):\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/base|inheritance/);
+  // Item 5 turned positional base classes into real captured IR (see "lift: class
+  // inheritance" below). Keyword bases (metaclass=) and non-name base expressions
+  // (Generic[T]) stay refused — still without an IR home.
+  it("refuses a keyword base (metaclass=)", () => {
+    const src = "class C(metaclass=Meta):\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/keyword base|metaclass/);
+  });
+
+  it("refuses a non-name base expression (Generic[T])", () => {
+    const src = "class C(Generic[T]):\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/base class expression/);
   });
 
   it("refuses a class decorator", () => {
@@ -395,6 +403,67 @@ describe.skipIf(!hasPython())("lift: classes (Python)", () => {
     expect(validateSystem(liftPython(codeA)).ok).toBe(true);
     const codeB = transpile(liftPython(codeA), "python");
     expect(codeB).toBe(codeA);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: class inheritance (Python)", () => {
+  it("captures a single base class onto the class module and round-trips", () => {
+    const src = [
+      "class HttpError(RequestException):",
+      "    code: int",
+      "",
+      "    def status(self) -> int:",
+      "        return self.code",
+      "",
+    ].join("\n");
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["HttpError"]!.bases).toEqual(["RequestException"]);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("class HttpError(RequestException):");
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA); // fixed point
+  });
+
+  it("captures multiple and dotted bases and round-trips them in order", () => {
+    const src = [
+      "class CaseInsensitiveDict(collections.abc.MutableMapping, Base):",
+      "    pass",
+      "",
+    ].join("\n");
+    const sys = liftPython(src);
+    expect(sys.modules["CaseInsensitiveDict"]!.bases).toEqual([
+      "collections.abc.MutableMapping",
+      "Base",
+    ]);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("class CaseInsensitiveDict(collections.abc.MutableMapping, Base):");
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA); // fixed point
+  });
+});
+
+describe("lift: class inheritance (TS)", () => {
+  it("captures an `extends` base and round-trips it", () => {
+    const src = [
+      "export class HttpError extends RequestException {",
+      "  code: number;",
+      "",
+      "  status(): number {",
+      "    return this.code;",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["HttpError"]!.bases).toEqual(["RequestException"]);
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toContain("export class HttpError extends RequestException {");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+  });
+
+  it("refuses an `implements` clause (no IR home)", () => {
+    const src = "export class C implements I {\n}\n";
+    expect(() => liftTypeScript(src)).toThrow(/implements/);
   });
 });
 

@@ -171,7 +171,11 @@ function fn(f: Fn, indent = ""): string {
 
 function cls(c: Class): string {
   const lines = c.doc !== undefined ? jsDoc(c.doc, "") : [];
-  lines.push(`export class ${pascal(c.name)} {`);
+  // TS has single inheritance: emit the bases (verbatim type identifiers) via one
+  // `extends`. A class lifted from TS carries at most one base; a Python class with
+  // several has no faithful TS form, so they are joined after `extends` as-is.
+  const heritage = c.bases && c.bases.length ? ` extends ${c.bases.join(", ")}` : "";
+  lines.push(`export class ${pascal(c.name)}${heritage} {`);
   for (const f of c.fields) lines.push(`  ${camel(f.name)}: ${tsType(f.type)};`);
   for (const m of c.methods) {
     lines.push("");

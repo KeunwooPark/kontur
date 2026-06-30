@@ -128,6 +128,14 @@ export interface Class {
   name: string;
   fields: Field[];
   methods: Fn[];
+  /**
+   * Base classes (inheritance), in declared order — each a name or dotted name
+   * (`RequestException`, `collections.abc.MutableMapping`). Emitted VERBATIM, like
+   * any other type identifier (cf. `Stmt`'s `throw.errorType`): Python renders all
+   * as positional bases `class C(A, B):`; TS renders them as `extends A` (single
+   * inheritance — TS cannot express more than one). Absent ⇒ no base class.
+   */
+  bases?: string[];
   /** The captured class docstring (human text only); see `Fn.doc`. */
   doc?: string;
   /** Provenance back to the class definition (lifters only). */

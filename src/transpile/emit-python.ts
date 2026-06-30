@@ -182,7 +182,10 @@ function fn(f: Fn, indent = ""): string {
 }
 
 function cls(c: Class): string {
-  const lines = [`class ${pascal(c.name)}:`];
+  // Bases are type identifiers, emitted verbatim (not re-cased) — Python allows
+  // several, joined as positional bases: `class C(A, B):`.
+  const bases = c.bases && c.bases.length ? `(${c.bases.join(", ")})` : "";
+  const lines = [`class ${pascal(c.name)}${bases}:`];
   if (c.doc !== undefined) lines.push(`    ${pyDocLiteral(c.doc)}`);
   for (const field of c.fields) lines.push(`    ${snake(field.name)}: ${pyType(field.type)}`);
   for (const m of c.methods) {
