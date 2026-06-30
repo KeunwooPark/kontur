@@ -1059,6 +1059,80 @@ describe.skipIf(!hasPython())("lift: Python collection literals (item 12, slice 
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python subscript & slice (item 12, slice C)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("lifts a variable subscript `a[i]` to an `index` node and round-trips", () => {
+    const { sys, py } = rt("def f(a: list, i: int) -> int:\n    return a[i]\n");
+    expect(py).toContain("return a[i]");
+    expect(nodeKinds(sys, "f")).toContain("index");
+  });
+
+  it("lifts a constant-int subscript `a[0]` to `index` (not the string `member`)", () => {
+    const { sys, py } = rt("def f(a: list) -> int:\n    return a[0]\n");
+    expect(py).toContain("return a[0]"); // NOT a["0"]
+    expect(nodeKinds(sys, "f")).toContain("index");
+    expect(nodeKinds(sys, "f")).not.toContain("member");
+  });
+
+  it("still routes a constant-STRING subscript through `member` (no new `index` node)", () => {
+    // A constant-string subscript on a bare name stays the `member` port accessor
+    // — which resolves to a port-endpoint REF, not a node — so the interior gains
+    // NO `index` node. Proof the string-key path is unchanged (cf. `a[0]` above,
+    // which now does produce an `index`).
+    const sys = liftPython('def f(r: dict) -> int:\n    return r["x"]\n');
+    expect(nodeKinds(sys, "f")).not.toContain("index");
+  });
+
+  it("lifts a subscript on a call result and round-trips", () => {
+    const { py } = rt('def f(s: str) -> str:\n    return s.split(".")[0]\n');
+    expect(py).toContain('return s.split(".")[0]');
+  });
+
+  it("lifts an open-ended slice `a[:3]` (the requests __init__ shape) and round-trips", () => {
+    const { sys, py } = rt('def f(s: str) -> list:\n    return s.split(".")[:3]\n');
+    expect(py).toContain('return s.split(".")[:3]');
+    expect(nodeKinds(sys, "f")).toContain("slice");
+  });
+
+  it("lifts each slice bound shape and round-trips", () => {
+    expect(rt("def f(a: list) -> list:\n    return a[1:3]\n").py).toContain("return a[1:3]");
+    expect(rt("def f(a: list) -> list:\n    return a[1:]\n").py).toContain("return a[1:]");
+    expect(rt("def f(a: list) -> list:\n    return a[:]\n").py).toContain("return a[:]");
+  });
+
+  it("cross-compiles a subscript to `a[i]` and a slice to `.slice(...)` in TS", () => {
+    const sys = liftPython("def f(a: list, i: int) -> list:\n    print(a[i])\n    return a[1:3]\n");
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("a[i]");
+    expect(ts).toContain("a.slice(1, 3)");
+  });
+
+  it("refuses a step slice `a[::2]` (deferred)", () => {
+    expect(() => liftPython("def f(a: list) -> list:\n    return a[::2]\n")).toThrow(/slice step/);
+  });
+});
+
+describe("lift: subscript round-trips from TypeScript (item 12, slice C)", () => {
+  it("lifts a TS subscript `a[i]` to an `index` node and is a fixed point", () => {
+    const src = "export function f(a: number[], i: number): number {\n  return a[i];\n}\n";
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+    expect(codeA).toContain("return a[i];");
+    expect(sys.modules["f"]!.interior.nodes.map((n) => n.kind)).toContain("index");
+  });
+});
+
 describe.skipIf(!hasPython())("lift: Python for-each (collection loop)", () => {
   const SRC = "def print_all(items: list) -> None:\n    for item in items:\n        print(item)\n";
 

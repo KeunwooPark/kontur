@@ -315,6 +315,15 @@ class ModuleCompiler {
         }
         return { t: "collection", form: node.form, elems };
       }
+      case "index":
+        return { t: "index", obj: this.resolveInput(node.id, "obj"), key: this.resolveInput(node.id, "key") };
+      case "slice": {
+        // Each bound is present only when its pin is wired (an absent bound is an
+        // open slice end, `obj[:3]` / `obj[1:]`).
+        const bound = (pin: "start" | "stop") =>
+          this.dataSrc.has(`${node.id}:${pin}`) ? { [pin]: this.resolveInput(node.id, pin) } : {};
+        return { t: "slice", obj: this.resolveInput(node.id, "obj"), ...bound("start"), ...bound("stop") };
+      }
       case "comprehension":
         return {
           t: "comprehension",

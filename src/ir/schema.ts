@@ -176,6 +176,19 @@ export const Node = z.discriminatedUnion("kind", [
   // elements); for dict, data-in "key0","val0","key1","val1",… (the entries,
   // paired and in source order); one data out. An empty literal has no in-pins.
   z.object({ ...nodeBase, kind: z.literal("collection"), label: z.string(), form: z.enum(["tuple", "set", "dict"]) }).strict(),
+  // A subscript read `obj[key]`: index a list/dict/string by an arbitrary key.
+  // Pins: data-in "obj" (the indexed value) and "key" (the index expression); one
+  // data out (the element). Distinct from `member` (a constant-STRING field of a
+  // multi-output result); `index` is the general runtime subscript and round-trips
+  // in BOTH backends (`obj[key]`). `label` is always "index".
+  z.object({ ...nodeBase, kind: z.literal("index"), label: z.string() }).strict(),
+  // A slice read `obj[start:stop]`: pins data-in "obj" plus EITHER optional bound
+  // "start"/"stop" (an absent bound = an open end, `obj[:3]` / `obj[1:]`); one data
+  // out. Python renders it faithfully (a source fixed point); TS has no slice form,
+  // so it cross-compiles one-way to `obj.slice(start, stop)` and the TS lifter never
+  // produces it — like `collection`'s set/dict forms. A step slice is refused at
+  // lift (deferred). `label` is always "slice".
+  z.object({ ...nodeBase, kind: z.literal("slice"), label: z.string() }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
   // `call`, when present, is the name the caller invokes this link by, used when
   // it differs from the target's declared name: an import alias (`import { f as g }`

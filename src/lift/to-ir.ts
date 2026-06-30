@@ -471,6 +471,24 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       }
       return id;
     }
+    case "index": {
+      // A subscript read `obj[key]`: the indexed value flows in on "obj", the key
+      // on "key"; one pure data-out (the element). The receiver is evaluated first.
+      const id = newNode(ctx, { kind: "index", label: "index" });
+      ctx.wires.push([lowerExpr(ctx, e.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, e.key), `${id}:key`, "data"]);
+      return id;
+    }
+    case "slice": {
+      // A slice read `obj[start:stop]`: the receiver on "obj", each PRESENT bound on
+      // its pin. An absent bound is an open end (no wire), so it stays open on the
+      // way back out.
+      const id = newNode(ctx, { kind: "slice", label: "slice" });
+      ctx.wires.push([lowerExpr(ctx, e.obj), `${id}:obj`, "data"]);
+      if (e.start) ctx.wires.push([lowerExpr(ctx, e.start), `${id}:start`, "data"]);
+      if (e.stop) ctx.wires.push([lowerExpr(ctx, e.stop), `${id}:stop`, "data"]);
+      return id;
+    }
     case "comprehension": {
       const id = newNode(ctx, { kind: "comprehension", label: e.varName });
       ctx.wires.push([lowerExpr(ctx, e.from), `${id}:from`, "data"]);
@@ -784,6 +802,8 @@ function exprReads(e: Expr, out: Set<string>): void {
       if (e.cond) exprReads(e.cond, out);
       break;
     case "attr": exprReads(e.obj, out); break;
+    case "index": exprReads(e.obj, out); exprReads(e.key, out); break;
+    case "slice": exprReads(e.obj, out); if (e.start) exprReads(e.start, out); if (e.stop) exprReads(e.stop, out); break;
     case "call": e.args.forEach((a) => exprReads(a, out)); if (e.recv) exprReads(e.recv, out); break;
     // lit, self, stateGet: no variable reads
   }
