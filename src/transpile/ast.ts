@@ -76,6 +76,13 @@ export type Stmt = { span?: SourceSpan } & (
   | { t: "print"; arg: Expr }
   /** Write an attribute of the enclosing class: `this.attr = value`. */
   | { t: "stateSet"; attr: string; value: Expr }
+  /** Write an attribute on an arbitrary receiver: `obj.attr = value`. The
+   *  write-side counterpart of an `attr` read; distinct from `stateSet` (the
+   *  enclosing class's own `self.attr`), the receiver `obj` may be any expression. */
+  | { t: "attrSet"; obj: Expr; attr: string; value: Expr }
+  /** Write an indexed element: `obj[key] = value` — the write-side counterpart of
+   *  an `index` read. The general subscript-assignment lvalue. */
+  | { t: "indexSet"; obj: Expr; key: Expr; value: Expr }
   | { t: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
   /** Inclusive counted loop: `for v in from..to`. */
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }

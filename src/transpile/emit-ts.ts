@@ -132,6 +132,10 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}console.log(${expr(s.arg)});`];
     case "stateSet":
       return [`${indent}this.${camel(s.attr)} = ${expr(s.value)};`];
+    case "attrSet":
+      return [`${indent}${expr(s.obj)}.${s.attr} = ${expr(s.value)};`];
+    case "indexSet":
+      return [`${indent}${expr(s.obj)}[${expr(s.key)}] = ${expr(s.value)};`];
     case "throw":
       // Absent errorType ⇒ the catch-all `Error`; a named type emits that
       // constructor (`throw new TypeError(...)`).

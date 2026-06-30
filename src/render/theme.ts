@@ -44,6 +44,8 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "stateGet", glyph: "↥", label: "read attribute" },
   { kind: "stateSet", glyph: "↧", label: "write attribute" },
   { kind: "attrGet", glyph: "↦", label: "read member" },
+  { kind: "attrSet", glyph: "↤", label: "write member" },
+  { kind: "indexSet", glyph: "⊐", label: "index write — subscript assign" },
 ];
 
 export interface Theme {
@@ -136,13 +138,16 @@ export const paper: Theme = {
     // subscript/slice read off a collection — share the collection teal.
     index: { fill: "#daf0f3", stroke: "#0a7d8c" },
     slice: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    // a subscript write shares the collection teal (it writes into a collection).
+    indexSet: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // state family — one shared indigo hue so attributes + their accessors read
     // as a group, distinct from the flow kinds above.
     state: { fill: "#e6e7fb", stroke: "#4b4fc4" },
     stateGet: { fill: "#eceefc", stroke: "#5a67d8" },
     stateSet: { fill: "#eceefc", stroke: "#5a67d8" },
-    // a member read shares the state-accessor indigo (it reads off a receiver).
+    // member read/write share the state-accessor indigo (they touch a receiver).
     attrGet: { fill: "#eceefc", stroke: "#5a67d8" },
+    attrSet: { fill: "#eceefc", stroke: "#5a67d8" },
   },
   external: { fill: "#f0ece6", stroke: "#8a6d4f" }, // taupe — off-palette "not your code"
 };
@@ -181,10 +186,12 @@ export const ink: Theme = {
     itercomp: { fill: "#10303a", stroke: "#2bb5c9" },
     index: { fill: "#10303a", stroke: "#2bb5c9" },
     slice: { fill: "#10303a", stroke: "#2bb5c9" },
+    indexSet: { fill: "#10303a", stroke: "#2bb5c9" }, // subscript write — collection teal
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },
     stateGet: { fill: "#191b30", stroke: "#7c83e8" },
     stateSet: { fill: "#191b30", stroke: "#7c83e8" },
     attrGet: { fill: "#191b30", stroke: "#7c83e8" }, // member read — state-accessor indigo
+    attrSet: { fill: "#191b30", stroke: "#7c83e8" }, // member write — state-accessor indigo
   },
   external: { fill: "#241f17", stroke: "#b08d63" }, // muted amber-brown — "not your code"
 };

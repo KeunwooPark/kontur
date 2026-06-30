@@ -220,6 +220,20 @@ export const Node = z.discriminatedUnion("kind", [
   // Write an attribute of the enclosing class: a control-sequenced effect
   // (`this.attr = …`), with one data in-pin "value". Effects-as-control-nodes.
   z.object({ ...nodeBase, kind: z.literal("stateSet"), label: z.string(), attr: z.string().min(1) }).strict(),
+  // Write an attribute on an ARBITRARY receiver: `obj.attr = value` — the
+  // write-side sibling of `attrGet`, a control-sequenced effect (like `stateSet`,
+  // but the receiver is wired in). Pins: control-in/out, data-in "obj" (the
+  // receiver) and "value"; no data-out (an assignment is a statement, not a
+  // value). Unlike `stateSet` (the enclosing class's own `self.attr`), any value
+  // can be the base. `attr` is the attribute name, emitted verbatim. Round-trips
+  // in both backends (`obj.attr = v`).
+  z.object({ ...nodeBase, kind: z.literal("attrSet"), label: z.string(), attr: z.string().min(1) }).strict(),
+  // Write an indexed element: `obj[key] = value` — the write-side sibling of
+  // `index`, a control-sequenced effect. Pins: control-in/out, data-in "obj" (the
+  // indexed value), "key" (the index expression) and "value"; no data-out. The
+  // general subscript-assignment lvalue, round-tripping in both backends
+  // (`obj[key] = v`). `label` is always "index".
+  z.object({ ...nodeBase, kind: z.literal("indexSet"), label: z.string() }).strict(),
 ]);
 
 /**

@@ -251,6 +251,28 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "attrSet") {
+        stmts.push({
+          t: "attrSet",
+          obj: this.resolveInput(node.id, "obj"),
+          attr: node.attr,
+          value: this.resolveInput(node.id, "value"),
+        });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
+      if (node.kind === "indexSet") {
+        stmts.push({
+          t: "indexSet",
+          obj: this.resolveInput(node.id, "obj"),
+          key: this.resolveInput(node.id, "key"),
+          value: this.resolveInput(node.id, "value"),
+        });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "effect") {
         if (node.op === "print") {
           stmts.push({ t: "print", arg: this.resolveInput(node.id, "value") });
