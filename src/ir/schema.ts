@@ -9,9 +9,10 @@
  *  - The IR is the single source of truth. Code and diagram are derived from it.
  *  - A Module IS a Node: a `module` node is a *link* to another module.
  *  - Issue #5 ("derived, not restated contracts") is handled structurally here:
- *    a `module` node carries ONLY a `ref`. Its ports are derived from
- *    `modules[ref].ports`, so a caller's view of the contract cannot drift from
- *    the definition. There is no place to restate ports incorrectly.
+ *    a `module` node carries a `ref` (plus an optional `call` emit-hint that does
+ *    NOT affect the contract). Its ports are derived from `modules[ref].ports`, so
+ *    a caller's view of the contract cannot drift from the definition. There is no
+ *    place to restate ports incorrectly.
  */
 import { z } from "zod";
 
@@ -131,7 +132,13 @@ export const Node = z.discriminatedUnion("kind", [
   // (the resulting list). `label` is the bound variable name.
   z.object({ ...nodeBase, kind: z.literal("comprehension"), label: z.string() }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
-  z.object({ ...nodeBase, kind: z.literal("module"), ref: z.string().min(1) }).strict(),
+  // `call`, when present, is the name the caller invokes this link by, used when
+  // it differs from the target's declared name: an import alias (`import { f as g }`
+  // → "g") or a namespaced member access (`ns.f()` → "ns.f"). It is an EMIT HINT
+  // only — the transpiler renders the call by this name so it matches the file's
+  // verbatim import line; it never affects the derived contract. Absent ⇒ the
+  // link is called by the target's bare name.
+  z.object({ ...nodeBase, kind: z.literal("module"), ref: z.string().min(1), call: z.string().min(1).optional() }).strict(),
   // --- class support (a class is a module of kind "class") ------------------
   // A stored attribute, drawn on the class canvas. `label` is the attribute
   // name; `type` is its type label (issue #3). It owns no flow — it is a cell.
@@ -172,6 +179,15 @@ export const Module = z
     interior: Interior,
     /** Provenance for the module as a whole (e.g. a function/method/class def). */
     prov: SourceSpan.optional(),
+    /**
+     * The project-relative source file this module was lifted from (e.g.
+     * "src/util.ts"). Set only by the multi-file project driver, which qualifies
+     * module ids by path so two files can each define a `helper` without
+     * colliding. Absent for single-file lifts and hand-authored IR, where ids are
+     * bare names. The transpiler regroups modules by `origin` to emit one file
+     * each and reproduce that file's imports.
+     */
+    origin: z.string().min(1).optional(),
   })
   .strict();
 
@@ -197,6 +213,13 @@ export const Import = z
     source: z.string().min(1),
     bindings: z.array(ImportBinding),
     prov: SourceSpan.optional(),
+    /**
+     * The project-relative file this import statement belongs to (e.g.
+     * "src/main.ts"). Set only by the multi-file driver so the transpiler can
+     * reproduce each file's own import lines; absent for single-file lifts, where
+     * every import belongs to the one file being emitted.
+     */
+    origin: z.string().min(1).optional(),
   })
   .strict();
 

@@ -16,6 +16,47 @@
 import type { Class, Expr, Fn, Program, Stmt } from "../transpile/ast.js";
 import type { Import, Module, Node, Port, SourceSpan, System, Wire } from "../ir/schema.js";
 
+/**
+ * Where a locally-imported name resolves to in the merged System. A `named`
+ * import (`import { foo } from "./util"`) binds straight to that function's
+ * qualified module id; a `namespace` import (`import * as util from "./util"`)
+ * binds the whole file, so a `util.foo()` call qualifies the member at use site.
+ */
+export type LocalImportTarget =
+  | { kind: "function"; id: string }
+  | { kind: "namespace"; moduleKey: string };
+
+/**
+ * Optional context supplied by the multi-file project driver. Absent for the
+ * single-file `liftTypeScript`/`liftPython` entry points, where ids stay bare,
+ * no `origin` is recorded, and every import is treated as external — i.e. the
+ * lift is byte-for-byte what it was before multi-file support.
+ */
+export interface LiftContext {
+  /** Project-relative source path, stamped onto every module + import. */
+  origin?: string;
+  /** Path-without-extension used to qualify ids (`${moduleKey}#${name}`). Absent ⇒ bare ids. */
+  moduleKey?: string;
+  /** Local-binding name → the in-project module it resolves to (turns cross-file calls into links). */
+  localImports?: Map<string, LocalImportTarget>;
+  /**
+   * Local-binding name → the third-party package it came from, for the bindings
+   * the driver has classified as EXTERNAL (so their calls are tagged `source`).
+   * Supplying this hands import classification to the driver, which knows the
+   * filesystem: a relative import that resolves to a local file we couldn't lift
+   * is then neither a link nor a package — it degrades to a plain stub. Absent
+   * (single-file lift) ⇒ every imported name is treated as external, as before.
+   */
+  externalImports?: Map<string, string>;
+  /**
+   * Qualified module id → its parameter names, for EVERY module in the project.
+   * A link's argument wires are keyed by the callee's port names, so a cross-file
+   * call needs the target file's params — which this file's own scan can't see.
+   * The driver supplies the whole-project map; merged with this file's functions.
+   */
+  moduleParams?: Map<string, string[]>;
+}
+
 interface Ctx {
   nodes: Node[];
   wires: Wire[];
@@ -23,38 +64,70 @@ interface Ctx {
   varMap: Map<string, string>;
   used: Set<string>;
   knownFns: Set<string>;
-  fnParams: Map<string, string[]>;
+  /** qualified module id → its param names (whole project), for wiring link args. */
+  moduleParams: Map<string, string[]>;
   /** imported local name → the package it came from (for tagging external calls). */
   importSource: Map<string, string>;
+  /** local-binding name → in-project module it resolves to (for cross-file links). */
+  localImports: Map<string, LocalImportTarget>;
+  /** simple name → fully-qualified module id (identity when ids are bare). */
+  qualify: (name: string) => string;
   counter: { n: number };
   returnSource: string | undefined;
 }
 
-export function liftProgram(program: Program): System {
+export function liftProgram(program: Program, lift: LiftContext = {}): System {
   const knownFns = new Set(program.functions.map((f) => f.name));
-  const fnParams = new Map(program.functions.map((f) => [f.name, f.params.map((p) => p.name)]));
-  // Map every imported local name to its package, so a call through that name can
-  // be tagged with where it crosses into third-party code.
+  const localImports = lift.localImports ?? new Map<string, LocalImportTarget>();
+  // Qualify ids by source path so two files can each define `helper` without
+  // colliding. Identity when no moduleKey is given (single-file / hand-authored).
+  const qualify = (name: string): string => (lift.moduleKey ? `${lift.moduleKey}#${name}` : name);
+  // Param names keyed by qualified id: start from the project-wide map (so links
+  // into other files wire correctly) and add this file's own functions.
+  const moduleParams = new Map(lift.moduleParams ?? []);
+  for (const f of program.functions) moduleParams.set(qualify(f.name), f.params.map((p) => p.name));
+  // Map every imported local name to the package it crosses into, so a call
+  // through that name is tagged `source`. When the driver has classified imports
+  // (it knows the filesystem), use its external map verbatim; otherwise — a
+  // single-file lift — treat every imported name as external, as before.
   const importSource = new Map<string, string>();
-  for (const imp of program.imports ?? []) {
-    for (const b of imp.bindings) importSource.set(b.local, imp.source);
+  if (lift.externalImports) {
+    for (const [local, source] of lift.externalImports) importSource.set(local, source);
+  } else {
+    for (const imp of program.imports ?? []) {
+      for (const b of imp.bindings) {
+        if (!localImports.has(b.local)) importSource.set(b.local, imp.source);
+      }
+    }
   }
+  const shared = { knownFns, moduleParams, importSource, localImports, qualify };
   const modules: Record<string, Module> = {};
-  for (const fn of program.functions) modules[fn.name] = lowerFn(fn, knownFns, fnParams, importSource);
-  for (const cls of program.classes) lowerClass(cls, modules, knownFns, fnParams, importSource);
+  for (const fn of program.functions) modules[qualify(fn.name)] = lowerFn(fn, shared, lift.origin);
+  for (const cls of program.classes) lowerClass(cls, modules, shared, lift.origin);
   // Entry-point canvases: the top-level declarations (free functions + classes),
   // never the methods — those are reached by descending into the class.
-  const features = [...program.functions.map((f) => f.name), ...program.classes.map((c) => c.name)];
+  const features = [
+    ...program.functions.map((f) => qualify(f.name)),
+    ...program.classes.map((c) => qualify(c.name)),
+  ];
   const system: System = { features, modules };
   // Record imports verbatim so the transpiler can reproduce them (round-trip
   // fidelity). Mapped span → prov to match the IR's provenance field name.
   if (program.imports && program.imports.length > 0) {
     system.imports = program.imports.map(
-      (imp): Import => ({ source: imp.source, bindings: imp.bindings, ...(imp.span ? { prov: imp.span } : {}) }),
+      (imp): Import => ({
+        source: imp.source,
+        bindings: imp.bindings,
+        ...(imp.span ? { prov: imp.span } : {}),
+        ...(lift.origin ? { origin: lift.origin } : {}),
+      }),
     );
   }
   return system;
 }
+
+/** The shared, file-wide resolution state passed to every lowering helper. */
+type Shared = Pick<Ctx, "knownFns" | "moduleParams" | "importSource" | "localImports" | "qualify">;
 
 /** The package a call name crosses into, or undefined for a local/builtin call.
  *  The base identifier (`name` before any `.`) is what an import binds. */
@@ -71,35 +144,38 @@ function externalSource(ctx: Ctx, name: string): string | undefined {
 function lowerClass(
   cls: Class,
   modules: Record<string, Module>,
-  knownFns: Set<string>,
-  fnParams: Map<string, string[]>,
-  importSource: Map<string, string>,
+  shared: Shared,
+  origin: string | undefined,
 ): void {
   const nodes: Node[] = [];
   for (const field of cls.fields) {
     nodes.push({ id: field.name, kind: "state", label: field.name, type: field.type });
   }
+  // A method id is the class id plus `.method`; the class id itself is qualified
+  // by source path so methods of same-named classes in different files stay distinct.
+  const classId = shared.qualify(cls.name);
   for (const m of cls.methods) {
-    const methodId = `${cls.name}.${m.name}`;
-    modules[methodId] = lowerFn(m, knownFns, fnParams, importSource);
+    const methodId = `${classId}.${m.name}`;
+    modules[methodId] = lowerFn(m, shared, origin);
     nodes.push({ id: methodId, kind: "module", ref: methodId });
   }
-  modules[cls.name] = {
+  modules[classId] = {
     title: cls.name,
     kind: "class",
     ports: [],
     interior: { nodes, wires: [] },
     ...(cls.span ? { prov: cls.span } : {}),
+    ...(origin ? { origin } : {}),
   };
 }
 
-function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>, importSource: Map<string, string>): Module {
+function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
   fn = normalizeReturns(fn);
   fn = { ...fn, body: foldGuards(fn.body) };
   assertSupported(fn);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
-    knownFns, fnParams, importSource, counter: { n: 0 }, returnSource: undefined,
+    ...shared, counter: { n: 0 }, returnSource: undefined,
   };
 
   const ports: Port[] = [{ name: "exec", type: "exec", io: "in", wire: "control" }];
@@ -120,7 +196,13 @@ function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>,
     ctx.wires.push([open, "P:done", "control"]);
   }
 
-  return { title: fn.name, ports, interior: { nodes: ctx.nodes, wires: ctx.wires }, ...(fn.span ? { prov: fn.span } : {}) };
+  return {
+    title: fn.name,
+    ports,
+    interior: { nodes: ctx.nodes, wires: ctx.wires },
+    ...(fn.span ? { prov: fn.span } : {}),
+    ...(origin ? { origin } : {}),
+  };
 }
 
 /** Lower a statement list, threading control from `entryFrom`. Returns the open
@@ -249,22 +331,56 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
 
 /** A call that is sequenced on the control wire: a module link or a stub. */
 function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: string, prov?: SourceSpan): string {
-  if (ctx.knownFns.has(e.name)) {
-    const id = newNode(ctx, { kind: "module", ref: e.name }, idHint, prov);
-    const params = ctx.fnParams.get(e.name) ?? [];
+  // A call to a sibling function in the same file → a link (ref qualified to match
+  // the sibling's module id). An in-project imported function → a link to its file.
+  const link = linkTarget(ctx, e.name);
+  if (link !== undefined) {
+    // Record the call-site name when it differs from the target's declared name —
+    // an import alias (`f as g`) or a namespaced member call (`ns.f`) — so the
+    // transpiler re-emits it to match the file's verbatim import line. A plain
+    // same-name call carries no `call` (keeps the common case minimal).
+    const call = e.name === bareName(link) ? {} : { call: e.name };
+    const id = newNode(ctx, { kind: "module", ref: link, ...call }, idHint, prov);
+    // Wire args by the CALLEE's param names (port names on its contract), looked
+    // up by the resolved target id so a cross-file link wires correctly too.
+    const params = ctx.moduleParams.get(link) ?? [];
     e.args.forEach((arg, i) => {
       const port = params[i] ?? `arg${i}`;
       ctx.wires.push([lowerExpr(ctx, arg), `${id}:${port}`, "data"]);
     });
     return id;
   }
-  // Not a sibling module: a local helper/stub, or — if its base name was imported
-  // — a call into a package. The latter is tagged with `source` so the diagram
-  // shows the trust-boundary crossing.
+  // Not a link: a local helper/stub, or — if its base name was imported — a call
+  // into a package. The latter is tagged with `source` so the diagram shows the
+  // trust-boundary crossing.
   const source = externalSource(ctx, e.name);
   const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}) }, idHint, prov);
   for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
   return id;
+}
+
+/**
+ * The qualified module id a call name links to, or undefined if it is not an
+ * in-project module (a stub or a package call). Resolves, in order:
+ *   - a sibling function in the same file (qualified like every local module);
+ *   - a named local import (`import { foo } from "./util"` → the `foo` module);
+ *   - a namespaced local import (`import * as util` + `util.foo()` → `util#foo`).
+ */
+function linkTarget(ctx: Ctx, name: string): string | undefined {
+  if (ctx.knownFns.has(name)) return ctx.qualify(name);
+  const base = name.split(".")[0]!;
+  const local = ctx.localImports.get(base);
+  if (!local) return undefined;
+  if (local.kind === "function") return local.id;
+  // namespace import: `util.member` → the `member` module in util's file.
+  const member = name.slice(base.length + 1);
+  return member ? `${local.moduleKey}#${member}` : undefined;
+}
+
+/** The bare local name of a (possibly path-qualified) module id: `src/util#format` → `format`. */
+function bareName(id: string): string {
+  const hash = id.lastIndexOf("#");
+  return hash === -1 ? id : id.slice(hash + 1);
 }
 
 /** Lower a pure expression, returning the data-source endpoint that yields it. */

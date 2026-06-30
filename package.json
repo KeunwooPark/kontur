@@ -12,6 +12,8 @@
     "validate": "tsx src/cli/validate.ts",
     "transpile": "tsx src/cli/transpile.ts",
     "lift": "tsx src/cli/lift.ts",
+    "lift:project": "tsx src/cli/lift-project.ts",
+    "lift:dir": "tsx src/cli/lift-dir.ts",
     "slice": "tsx src/cli/slice.ts",
     "verify": "tsx --env-file-if-exists=.env.local src/cli/verify.ts",
     "render": "tsx src/cli/render.ts",
