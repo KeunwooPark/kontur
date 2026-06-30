@@ -195,7 +195,8 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
     return { t: "let", name: (decl.name as ts.Identifier).text, expr: liftExpr(decl.initializer!, sf) };
   }
   if (ts.isReturnStatement(s)) {
-    return { t: "return", expr: liftExpr(s.expression!, sf) };
+    // A bare `return;` (void early exit) carries no value.
+    return s.expression ? { t: "return", expr: liftExpr(s.expression, sf) } : { t: "return" };
   }
   if (ts.isIfStatement(s)) {
     return {

@@ -74,6 +74,11 @@ interface Ctx {
   qualify: (name: string) => string;
   counter: { n: number };
   returnSource: string | undefined;
+  /** The function's data out-port name (fn.returns[0].name), so a `return`
+   *  anywhere — early, nested, or per-branch — can wire its value to it. */
+  returnPort?: string;
+  /** Set when at least one `return`/`returnObject` wired a value to the out-port. */
+  returnFired?: boolean;
 }
 
 export function liftProgram(program: Program, lift: LiftContext = {}): System {
@@ -175,7 +180,6 @@ function lowerClass(
 function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
   fn = normalizeReturns(fn);
   fn = { ...fn, body: foldGuards(fn.body) };
-  assertSupported(fn);
   assertNoLoopCarriedState(fn);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
@@ -196,14 +200,19 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
     ctx.varMap.set(p.name, `P:${p.name}`);
   }
 
+  // The out-port name is known up front, so `return` statements anywhere in the
+  // body can wire to it (multi-exit). The port itself is declared below only if a
+  // return actually fired.
+  if (fn.returns.length >= 1) ctx.returnPort = fn.returns[0]!.name;
+
   const open = lowerBlock(ctx, fn.body, "P:exec");
 
-  if (fn.returns.length >= 1 && ctx.returnSource !== undefined) {
+  if (fn.returns.length >= 1 && ctx.returnFired) {
     const r = fn.returns[0]!;
     ports.push({ name: r.name, type: r.type, io: "out", wire: "data" });
-    ctx.wires.push([ctx.returnSource, `P:${r.name}`, "data"]);
   }
   if (open !== null) {
+    // Some control path falls through the body (no return) — a normal completion.
     ports.push({ name: "done", type: "exec", io: "out", wire: "control" });
     ctx.wires.push([open, "P:done", "control"]);
   }
@@ -339,10 +348,12 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // it — exactly like a counted loop's index. The body never sees it.
       const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "" }, undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
-      lowerBlock(ctx, s.body, `${id}:body`);
+      const bodyOpen = lowerBlock(ctx, s.body, `${id}:body`);
       if (s.catchParam) ctx.varMap.set(s.catchParam, `${id}:error`);
-      lowerBlock(ctx, s.handler, `${id}:catch`);
-      return `${id}:done`;
+      const handlerOpen = lowerBlock(ctx, s.handler, `${id}:catch`);
+      // Control reaches `done` only if some path (the body, or the handler) falls
+      // through; if both escape (return/throw), the try is itself terminal.
+      return bodyOpen === null && handlerOpen === null ? null : `${id}:done`;
     }
     case "with": {
       // A context-managed block. The context manager flows in on "context"; the
@@ -353,8 +364,10 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([lowerExpr(ctx, s.context), `${id}:context`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       if (s.resource) ctx.varMap.set(s.resource, `${id}:resource`);
-      lowerBlock(ctx, s.body, `${id}:body`);
-      return `${id}:done`;
+      // The body always runs, so if it always escapes (returns/throws), the `with`
+      // is itself terminal — control never reaches `done`.
+      const bodyOpen = lowerBlock(ctx, s.body, `${id}:body`);
+      return bodyOpen === null ? null : `${id}:done`;
     }
     case "assert": {
       // A control-sequenced effect: the predicate flows in on "cond", the optional
@@ -398,13 +411,25 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return null;
     }
-    case "return": {
-      ctx.returnSource = lowerExpr(ctx, s.expr);
-      return prev;
-    }
+    case "return":
     case "returnObject": {
-      if (s.fields[0]) ctx.returnSource = lowerExpr(ctx, s.fields[0].expr);
-      return prev;
+      // Multi-exit: a `return` is a TERMINAL control node (control-in, data-in
+      // "value", no control-out) — like `throw`, the chain dead-ends here. The
+      // value also wires to the function's data out-port; with several returns
+      // (early, per-branch, nested), each adds a wire and only one fires at
+      // runtime. The out-port is declared by lowerFn once any return has fired.
+      const valueExpr = s.t === "return" ? s.expr : s.fields[0]?.expr;
+      const id = newNode(ctx, { kind: "return", label: "return" }, undefined, s.span);
+      ctx.wires.push([prev, id, "control"]);
+      // A bare `return` (void early exit) has no value to carry; a value return
+      // wires its source to the node's "value" pin and to the data out-port.
+      if (valueExpr !== undefined && ctx.returnPort !== undefined) {
+        const src = lowerExpr(ctx, valueExpr);
+        ctx.wires.push([src, `${id}:value`, "data"]);
+        ctx.wires.push([src, `P:${ctx.returnPort}`, "data"]);
+        ctx.returnFired = true;
+      }
+      return null;
     }
   }
 }
@@ -715,6 +740,7 @@ function isTerminal(stmts: Stmt[]): boolean {
   const last = stmts[stmts.length - 1];
   if (!last) return false; // empty block falls through
   if (last.t === "throw" || last.t === "rethrow" || last.t === "break" || last.t === "continue") return true;
+  if (last.t === "return" || last.t === "returnObject") return true;
   // A branch escapes only if BOTH arms do; an empty/missing else falls through.
   if (last.t === "if") return isTerminal(last.then) && isTerminal(last.else);
   return false;
@@ -731,45 +757,11 @@ function ifReturnToExpr(s: Stmt): Expr | null {
 function blockReturnToExpr(block: Stmt[]): Expr | null {
   if (block.length !== 1) return null;
   const only = block[0]!;
-  if (only.t === "return") return only.expr;
+  if (only.t === "return") return only.expr ?? null;
   if (only.t === "if") return ifReturnToExpr(only);
   return null;
 }
 
-/**
- * Reject code outside what the transpiler can faithfully represent. The IR
- * model has one boundary out-port fed by one wire, so a function may have at
- * most one `return`, and it must be the final top-level statement (no early or
- * per-branch returns — those are normalized to a `select` above when possible).
- * Better to refuse than to lift a graph that lies.
- */
-function assertSupported(fn: Fn): void {
-  const fail = (): never => {
-    throw new Error(
-      `lift: function "${fn.name}" has an early/branch return — only a single ` +
-        `return as the final top-level statement is supported (example level)`,
-    );
-  };
-  const forbidNested = (s: Stmt): void => {
-    if (s.t === "return") fail();
-    if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
-    if (s.t === "for") s.body.forEach(forbidNested);
-    if (s.t === "while") s.body.forEach(forbidNested);
-    if (s.t === "foreach") s.body.forEach(forbidNested);
-    if (s.t === "with") s.body.forEach(forbidNested);
-    if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
-  };
-  fn.body.forEach((s, i) => {
-    const isTail = i === fn.body.length - 1;
-    if (s.t === "return") { if (!isTail) fail(); }
-    else if (s.t === "if") { s.then.forEach(forbidNested); s.else.forEach(forbidNested); }
-    else if (s.t === "for") s.body.forEach(forbidNested);
-    else if (s.t === "while") s.body.forEach(forbidNested);
-    else if (s.t === "foreach") s.body.forEach(forbidNested);
-    else if (s.t === "with") s.body.forEach(forbidNested);
-    else if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
-  });
-}
 
 /**
  * Reject loops that carry state across iterations. The IR is single-assignment
@@ -851,7 +843,7 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
       case "attrSet": exprReads(s.obj, out); exprReads(s.value, out); break;
       case "indexSet": exprReads(s.obj, out); exprReads(s.key, out); exprReads(s.value, out); break;
       case "expr": exprReads(s.expr, out); break;
-      case "return": exprReads(s.expr, out); break;
+      case "return": if (s.expr) exprReads(s.expr, out); break;
       case "returnObject": s.fields.forEach((f) => exprReads(f.expr, out)); break;
       case "throw": exprReads(s.arg, out); break;
       case "rethrow": exprReads(s.value, out); break;
@@ -926,7 +918,7 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "attrSet": expose(readsOf(s.obj)); expose(readsOf(s.value)); break;
       case "indexSet": expose(readsOf(s.obj)); expose(readsOf(s.key)); expose(readsOf(s.value)); break;
       case "expr": expose(readsOf(s.expr)); break;
-      case "return": expose(readsOf(s.expr)); break;
+      case "return": if (s.expr) expose(readsOf(s.expr)); break;
       case "returnObject": s.fields.forEach((f) => expose(readsOf(f.expr))); break;
       case "throw": expose(readsOf(s.arg)); break;
       case "rethrow": expose(readsOf(s.value)); break;

@@ -136,7 +136,8 @@ export type Stmt = { span?: SourceSpan } & (
    * enclosing catch binding).
    */
   | { t: "rethrow"; value: Expr }
-  | { t: "return"; expr: Expr }
+  /** Return a value, or a bare `return` (void early exit) when `expr` is absent. */
+  | { t: "return"; expr?: Expr }
   /** Return several named values (multi-output module). */
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] }
   /** Exit the nearest enclosing loop (`break`). Terminal: control leaves the

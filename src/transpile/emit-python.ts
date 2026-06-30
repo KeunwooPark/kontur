@@ -132,7 +132,7 @@ function stmt(s: Stmt, indent: string): string[] {
       // Re-raise an existing value unchanged: `raise e` (not wrapped).
       return [`${indent}raise ${expr(s.value)}`];
     case "return":
-      return [`${indent}return ${expr(s.expr)}`];
+      return [`${indent}return${s.expr ? ` ${expr(s.expr)}` : ""}`];
     case "returnObject":
       return [`${indent}return { ${s.fields.map((f) => `"${f.name}": ${expr(f.expr)}`).join(", ")} }`];
     case "if": {

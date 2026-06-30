@@ -34,6 +34,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "rethrow", glyph: "⤴", label: "rethrow — re-raise a value" },
   { kind: "break", glyph: "⤓", label: "break — exit loop" },
   { kind: "continue", glyph: "↺", label: "continue — next iteration" },
+  { kind: "return", glyph: "⏎", label: "return — function exit" },
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
   { kind: "select", glyph: "⋔", label: "select — value conditional" },
@@ -135,6 +136,7 @@ export const paper: Theme = {
     rethrow: { fill: "#fbe3e0", stroke: "#a01a2e" }, // deep crimson — re-raise an existing value
     break: { fill: "#f7eef0", stroke: "#a05a72" }, // muted plum — loop escape (loop-adjacent)
     continue: { fill: "#f7eef0", stroke: "#a05a72" }, // muted plum — loop escape
+    return: { fill: "#e9ecf2", stroke: "#3a4252" }, // ink grey — the function exit (spine end)
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
     select: { fill: "#f6ead0", stroke: "#a86b00" }, // deep amber — a data conditional
@@ -191,6 +193,7 @@ export const ink: Theme = {
     rethrow: { fill: "#3a141c", stroke: "#f07a88" },
     break: { fill: "#2e1c26", stroke: "#c07a98" },
     continue: { fill: "#2e1c26", stroke: "#c07a98" },
+    return: { fill: "#1e2430", stroke: "#8a96ac" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
     select: { fill: "#33270f", stroke: "#d09a3a" },

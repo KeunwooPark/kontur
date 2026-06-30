@@ -349,11 +349,10 @@ def _stmt(s):
             return {"t": "indexSet", "obj": obj, "key": key, "value": {"t": "bin", "op": op, "a": cur, "b": expr(s.value)}}
         raise SystemExit("lift(py): unsupported augmented-assignment target")
     if isinstance(s, ast.Return):
-        # A bare `return` (or `return None`) carries no value to wire to the out
-        # port. It is almost always an early exit (multi-exit control flow), which
-        # has no IR node yet — refuse loudly rather than crash on expr(None).
+        # A bare `return` (or `return None`) is a void early exit — a `return` node
+        # with no value pin (multi-exit control flow). A value return carries its expr.
         if s.value is None:
-            raise SystemExit("lift(py): unsupported bare `return` (no value / early exit, not yet modelled)")
+            return {"t": "return"}
         return {"t": "return", "expr": expr(s.value)}
     if isinstance(s, ast.If):
         return {
