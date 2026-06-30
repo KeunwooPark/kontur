@@ -133,7 +133,9 @@ function importLine(imp: Import): string {
 function stmt(s: Stmt, indent: string): string[] {
   switch (s.t) {
     case "let":
-      return [`${indent}const ${camel(s.name)} = ${expr(s.expr)};`];
+      // A loop-carried accumulator init is reassigned in the loop, so it needs a
+      // mutable `let`; an ordinary single-assignment bind is `const`.
+      return [`${indent}${s.mutable ? "let" : "const"} ${camel(s.name)} = ${expr(s.expr)};`];
     case "assign":
       return [`${indent}${camel(s.name)} = ${expr(s.expr)};`];
     case "expr":

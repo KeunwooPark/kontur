@@ -78,7 +78,7 @@ export type Expr =
 // by the emitters). Intersected over the union so every statement kind carries it
 // while still narrowing on `t`.
 export type Stmt = { span?: SourceSpan } & (
-  | { t: "let"; name: string; expr: Expr }
+  | { t: "let"; name: string; expr: Expr; mutable?: boolean }
   /** Reassign an existing binding: `name = expr` / `name += …`. */
   | { t: "assign"; name: string; expr: Expr }
   | { t: "expr"; expr: Expr }
