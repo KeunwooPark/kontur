@@ -168,6 +168,20 @@ export const Node = z.discriminatedUnion("kind", [
   z.object({ ...nodeBase, kind: z.literal("state"), label: z.string(), type: z.string().min(1) }).strict(),
   // Read an attribute of the enclosing class: a pure data source (`this.attr`).
   z.object({ ...nodeBase, kind: z.literal("stateGet"), label: z.string(), attr: z.string().min(1) }).strict(),
+  // Read an attribute off an arbitrary receiver value: `obj.attr`. A pure data
+  // source with one data-in pin "obj" (the receiver) and one data-out (the read
+  // value). Unlike `stateGet` (the enclosing class's own `self.attr`), the
+  // receiver is wired in, so any value — a param, a call result, a nested attr —
+  // can be the base. `attr` is the attribute name, emitted verbatim.
+  z.object({ ...nodeBase, kind: z.literal("attrGet"), label: z.string(), attr: z.string().min(1) }).strict(),
+  // A method call on a receiver: `recv.label(args)`. Like a stub `function` call
+  // but with a distinguished receiver. Pins: an optional data-in "recv" (the
+  // receiver) plus positional arg wires (bare-node `to` endpoints, in order); one
+  // data-out (the result). When NO "recv" wire is present the receiver is the
+  // ambient `self`/`this` — a method calling a sibling on its own object — so a
+  // self-call carries no receiver edge, mirroring how `self` is implicit in a
+  // method's interior. `label` is the method name, emitted verbatim.
+  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string() }).strict(),
   // Write an attribute of the enclosing class: a control-sequenced effect
   // (`this.attr = …`), with one data in-pin "value". Effects-as-control-nodes.
   z.object({ ...nodeBase, kind: z.literal("stateSet"), label: z.string(), attr: z.string().min(1) }).strict(),

@@ -45,9 +45,20 @@ def span(node):
     }
 
 
+def attr_root(e):
+    """The leftmost Name at the base of an Attribute/Subscript chain, or None."""
+    while isinstance(e, (ast.Attribute, ast.Subscript)):
+        e = e.value
+    return e if isinstance(e, ast.Name) else None
+
+
 def expr(e):
     if isinstance(e, ast.Constant):
         return {"t": "lit", "value": e.value}
+    # `self` is the ambient method receiver, never a value on its own; it only
+    # rides as the receiver of a method call or the base of `self.attr`.
+    if isinstance(e, ast.Name) and e.id == "self":
+        return {"t": "self"}
     if isinstance(e, ast.Name):
         return {"t": "var", "name": e.id}
     if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name) and e.value.id == "self":
@@ -91,6 +102,23 @@ def expr(e):
         }
     if isinstance(e, ast.Call) and call_name(e.func) is not None:
         return {"t": "call", "name": call_name(e.func), "args": [expr(a) for a in e.args]}
+    # A method call on a self/local receiver: `recv.method(args)`. The imported-base
+    # case (`pkg.fn(...)`) was taken above via call_name; what remains is a receiver
+    # we model as a value flowing into the call. A bare imported name as the receiver
+    # of a deeper read is a package value reference we do not model yet (see below).
+    if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute):
+        root = attr_root(e.func.value)
+        if root is not None and root.id in IMPORTED_NAMES:
+            raise SystemExit("lift(py): unsupported call on an imported value (package member chain, deferred): " + ast.dump(e.func))
+        return {"t": "call", "name": e.func.attr, "args": [expr(a) for a in e.args], "recv": expr(e.func.value)}
+    # A general attribute read `obj.attr` (self.attr was taken above as stateGet).
+    # A read off an imported name (`sys.maxsize`) is a package value reference with
+    # no receiver wire — a distinct construct, deferred, refused loudly.
+    if isinstance(e, ast.Attribute):
+        root = attr_root(e.value)
+        if root is not None and root.id in IMPORTED_NAMES:
+            raise SystemExit("lift(py): unsupported attribute read on an imported name (package value reference, deferred): " + ast.dump(e))
+        return {"t": "attr", "obj": expr(e.value), "name": e.attr}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
 
 
@@ -127,6 +155,11 @@ def _stmt(s):
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
         return {"t": "let", "name": s.targets[0].id, "expr": expr(s.value)}
     if isinstance(s, ast.Return):
+        # A bare `return` (or `return None`) carries no value to wire to the out
+        # port. It is almost always an early exit (multi-exit control flow), which
+        # has no IR node yet — refuse loudly rather than crash on expr(None).
+        if s.value is None:
+            raise SystemExit("lift(py): unsupported bare `return` (no value / early exit, not yet modelled)")
         return {"t": "return", "expr": expr(s.value)}
     if isinstance(s, ast.If):
         return {
@@ -158,7 +191,10 @@ def _stmt(s):
             "iter": expr(s.iter),
             "body": [stmt(x) for x in s.body],
         }
-    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and call_name(s.value.func) is not None:
+    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call):
+        # `print(x)` is the one call with a dedicated effect node; every other call
+        # statement (plain, package, or a self/local method call) routes through
+        # expr(), which classifies it or refuses loudly.
         if isinstance(s.value.func, ast.Name) and s.value.func.id == "print":
             return {"t": "print", "arg": expr(s.value.args[0])}
         return {"t": "expr", "expr": expr(s.value)}

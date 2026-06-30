@@ -344,11 +344,15 @@ function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
   if (e.kind === ts.SyntaxKind.FalseKeyword) return { t: "lit", value: false };
   if (e.kind === ts.SyntaxKind.NullKeyword) return { t: "lit", value: null };
   if (ts.isIdentifier(e)) return { t: "var", name: e.text };
+  if (e.kind === ts.SyntaxKind.ThisKeyword) return { t: "self" };
   if (ts.isPropertyAccessExpression(e)) {
     if (e.expression.kind === ts.SyntaxKind.ThisKeyword) {
       return { t: "stateGet", attr: e.name.text };
     }
-    return { t: "member", name: (e.expression as ts.Identifier).text, member: e.name.text };
+    // A general attribute read `obj.attr` — the receiver may be any expression.
+    // (A multi-output call result accessed as `r.field` also lands here; it
+    // round-trips as an attribute read, which is faithful at the source level.)
+    return { t: "attr", obj: liftExpr(e.expression, sf), name: e.name.text };
   }
   if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
     return { t: "un", op: "not", x: liftExpr(e.operand, sf) };
@@ -365,7 +369,18 @@ function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
     return { t: "array", elems: e.elements.map((el) => liftExpr(el, sf)) };
   }
   if (ts.isCallExpression(e)) {
-    return { t: "call", name: e.expression.getText(sf), args: e.arguments.map((a) => liftExpr(a, sf)) };
+    const args = e.arguments.map((a) => liftExpr(a, sf));
+    // `this.method(...)` is a method call on the ambient receiver — captured with
+    // an explicit `self` recv so it round-trips (a dotted "this.method" name has no
+    // local base for `to-ir` to classify). Every other callee keeps its verbatim
+    // dotted text; `to-ir` decides link / package / local-method / stub from it.
+    if (
+      ts.isPropertyAccessExpression(e.expression) &&
+      e.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+    ) {
+      return { t: "call", name: e.expression.name.text, recv: { t: "self" }, args };
+    }
+    return { t: "call", name: e.expression.getText(sf), args };
   }
   throw new Error(`lift(ts): unsupported expression "${ts.SyntaxKind[e.kind]}"`);
 }

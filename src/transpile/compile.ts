@@ -257,8 +257,11 @@ class ModuleCompiler {
           if (this.producesData(node.id)) stmts.push({ t: "let", name: node.id, expr: call });
           else stmts.push({ t: "expr", expr: call });
         }
-      } else if (node.kind === "function" || node.kind === "module") {
-        const expr = node.kind === "module" ? this.moduleCall(node) : this.exprFor(node);
+      } else if (node.kind === "function" || node.kind === "module" || node.kind === "method") {
+        const expr =
+          node.kind === "module" ? this.moduleCall(node)
+          : node.kind === "method" ? this.methodCall(node)
+          : this.exprFor(node);
         if (this.producesData(node.id)) stmts.push({ t: "let", name: node.id, expr });
         else stmts.push({ t: "expr", expr });
       } else {
@@ -277,6 +280,10 @@ class ModuleCompiler {
         return { t: "lit", value: node.value };
       case "stateGet":
         return { t: "stateGet", attr: node.attr };
+      case "attrGet":
+        return { t: "attr", obj: this.resolveInput(node.id, "obj"), name: node.attr };
+      case "method":
+        return this.methodCall(node);
       case "select":
         return {
           t: "cond",
@@ -332,6 +339,24 @@ class ModuleCompiler {
   private stubArgs(nodeId: string): Expr[] {
     return this.dataWires
       .filter(([, to]) => endpointNode(to) === nodeId)
+      .map(([from]) => this.resolveSrc(from));
+  }
+
+  /** Reconstruct a method call from a `method` node: the receiver is the wired
+   *  "recv" pin, or the ambient `self`/`this` when no such wire exists; the args
+   *  are the positional (bare-endpoint) wires, in order. */
+  private methodCall(node: Extract<Node, { kind: "method" }>): Expr {
+    const recv: Expr = this.dataSrc.has(`${node.id}:recv`)
+      ? this.resolveInput(node.id, "recv")
+      : { t: "self" };
+    return { t: "call", name: node.label, args: this.positionalArgs(node.id), recv };
+  }
+
+  /** A method node's positional args: data wires into its BARE endpoint (the
+   *  named "recv" pin is excluded), in wire order. */
+  private positionalArgs(nodeId: string): Expr[] {
+    return this.dataWires
+      .filter(([, to]) => to === nodeId)
       .map(([from]) => this.resolveSrc(from));
   }
 

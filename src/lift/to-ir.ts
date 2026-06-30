@@ -343,8 +343,11 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
   }
 }
 
-/** A call that is sequenced on the control wire: a module link or a stub. */
+/** A call that is sequenced on the control wire: a method, a module link, or a stub. */
 function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: string, prov?: SourceSpan): string {
+  // A method call on self/local → a `method` node sequenced in the control flow.
+  const m = methodParts(ctx, e);
+  if (m) return lowerMethod(ctx, m, idHint, prov);
   // A call to a sibling function in the same file → a link (ref qualified to match
   // the sibling's module id). An in-project imported function → a link to its file.
   const link = linkTarget(ctx, e.name);
@@ -404,6 +407,23 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       return newNode(ctx, { kind: "const", label: String(e.value), value: e.value });
     case "stateGet":
       return newNode(ctx, { kind: "stateGet", label: e.attr, attr: e.attr });
+    case "self":
+      // `self`/`this` is the ambient method receiver, not a value with a producing
+      // node — it only appears as a method's receiver (handled without a wire) or
+      // the base of `self.attr` (a stateGet). A bare `self` value has no IR source
+      // yet, so refuse it loudly rather than invent one.
+      throw new Error(
+        `lift: a bare "self"/"this" value has no IR representation yet — it is ` +
+          `modelled only as a method receiver or the base of self.attr (example level)`,
+      );
+    case "attr": {
+      // A general attribute read `obj.attr`: a pure data source whose receiver
+      // flows in on pin "obj". Distinct from `member` (a port of a multi-output
+      // result) and `stateGet` (the enclosing class's own attribute).
+      const id = newNode(ctx, { kind: "attrGet", label: e.name, attr: e.name });
+      ctx.wires.push([lowerExpr(ctx, e.obj), `${id}:obj`, "data"]);
+      return id;
+    }
     case "var": {
       const ep = ctx.varMap.get(e.name);
       if (ep === undefined) throw new Error(`lift: unbound variable "${e.name}"`);
@@ -448,14 +468,51 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       return id;
     }
     case "call": {
-      // A nested call in value position → a pure (un-sequenced) stub function,
-      // tagged with `source` when it calls into an imported package.
+      // A method call in value position (`return obj.foo()`) → a pure method node.
+      const m = methodParts(ctx, e);
+      if (m) return lowerMethod(ctx, m);
+      // Otherwise a nested call in value position → a pure (un-sequenced) stub
+      // function, tagged with `source` when it calls into an imported package.
       const source = externalSource(ctx, e.name);
       const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}) });
       for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
       return id;
     }
   }
+}
+
+/**
+ * The parts of a method call (`recv.name(args)`), or null when the call is a
+ * plain / link / package call. A call carries an explicit `recv` when the lifter
+ * already knew the receiver (the Python extractor, which sees imports; or a TS
+ * `this.foo()`). A TS `obj.foo()` arrives as a dotted NAME instead — import
+ * classification happens here, not at lift — so a dotted name that resolves to
+ * neither a link nor a package, and whose base is a bound local, is a method call
+ * on that local. (A dotted base that is unbound stays a stub, as before.)
+ */
+function methodParts(ctx: Ctx, e: Extract<Expr, { t: "call" }>): { recv: Expr; name: string; args: Expr[] } | null {
+  if (e.recv) return { recv: e.recv, name: e.name, args: e.args };
+  if (linkTarget(ctx, e.name) !== undefined) return null;
+  if (externalSource(ctx, e.name) !== undefined) return null;
+  const dot = e.name.indexOf(".");
+  if (dot === -1) return null;
+  const base = e.name.slice(0, dot);
+  if (!ctx.varMap.has(base)) return null;
+  return { recv: { t: "var", name: base }, name: e.name.slice(dot + 1), args: e.args };
+}
+
+/**
+ * Lower a method call to a `method` node. The receiver flows in on pin "recv",
+ * EXCEPT a `self`/`this` receiver, which is ambient (no wire) — a self-call is
+ * drawn with no incoming receiver edge, mirroring how `self` is implicit in the
+ * method's interior. Positional args are wired to the node's bare endpoint, in
+ * order, like a stub call's args.
+ */
+function lowerMethod(ctx: Ctx, m: { recv: Expr; name: string; args: Expr[] }, idHint?: string, prov?: SourceSpan): string {
+  const id = newNode(ctx, { kind: "method", label: m.name }, idHint, prov);
+  if (m.recv.t !== "self") ctx.wires.push([lowerExpr(ctx, m.recv), `${id}:recv`, "data"]);
+  for (const arg of m.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
+  return id;
 }
 
 /**
@@ -681,8 +738,9 @@ function exprReads(e: Expr, out: Set<string>): void {
     case "cond": exprReads(e.cond, out); exprReads(e.then, out); exprReads(e.else, out); break;
     case "array": e.elems.forEach((el) => exprReads(el, out)); break;
     case "comprehension": exprReads(e.from, out); exprReads(e.to, out); exprReads(e.elem, out); break;
-    case "call": e.args.forEach((a) => exprReads(a, out)); break;
-    // lit, stateGet: no variable reads
+    case "attr": exprReads(e.obj, out); break;
+    case "call": e.args.forEach((a) => exprReads(a, out)); if (e.recv) exprReads(e.recv, out); break;
+    // lit, self, stateGet: no variable reads
   }
 }
 

@@ -22,6 +22,7 @@ export type StyledKind = Exclude<NodeKind, "boundary">;
  */
 export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "function", glyph: "ƒ", label: "function" },
+  { kind: "method", glyph: "⟜", label: "method call" },
   { kind: "branch", glyph: "◆", label: "branch" },
   { kind: "loop", glyph: "↻", label: "loop" },
   { kind: "while", glyph: "⟲", label: "while loop" },
@@ -38,6 +39,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "state", glyph: "▣", label: "state — attribute" },
   { kind: "stateGet", glyph: "↥", label: "read attribute" },
   { kind: "stateSet", glyph: "↧", label: "write attribute" },
+  { kind: "attrGet", glyph: "↦", label: "read member" },
 ];
 
 export interface Theme {
@@ -110,6 +112,7 @@ export const paper: Theme = {
   edgeData: "#0072b2", // blue — values
   kinds: {
     function: { fill: "#e4eff7", stroke: "#0072b2" }, // blue
+    method: { fill: "#e4eff7", stroke: "#0072b2" }, // blue — a call, like function
     branch: { fill: "#fbf1da", stroke: "#e69f00" }, // amber
     loop: { fill: "#f7e7f0", stroke: "#cc79a7" }, // reddish purple
     while: { fill: "#e3f1fb", stroke: "#56b4e9" }, // sky blue — the other loop
@@ -129,6 +132,8 @@ export const paper: Theme = {
     state: { fill: "#e6e7fb", stroke: "#4b4fc4" },
     stateGet: { fill: "#eceefc", stroke: "#5a67d8" },
     stateSet: { fill: "#eceefc", stroke: "#5a67d8" },
+    // a member read shares the state-accessor indigo (it reads off a receiver).
+    attrGet: { fill: "#eceefc", stroke: "#5a67d8" },
   },
   external: { fill: "#f0ece6", stroke: "#8a6d4f" }, // taupe — off-palette "not your code"
 };
@@ -149,6 +154,7 @@ export const ink: Theme = {
   edgeData: "#5b9cff",
   kinds: {
     function: { fill: "#16263f", stroke: "#4f8cf0" },
+    method: { fill: "#16263f", stroke: "#4f8cf0" }, // a call, like function
     branch: { fill: "#3a2a12", stroke: "#e0a13a" },
     loop: { fill: "#2a1c3d", stroke: "#a878e8" },
     while: { fill: "#13283a", stroke: "#56b4e9" },
@@ -165,6 +171,7 @@ export const ink: Theme = {
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },
     stateGet: { fill: "#191b30", stroke: "#7c83e8" },
     stateSet: { fill: "#191b30", stroke: "#7c83e8" },
+    attrGet: { fill: "#191b30", stroke: "#7c83e8" }, // member read — state-accessor indigo
   },
   external: { fill: "#241f17", stroke: "#b08d63" }, // muted amber-brown — "not your code"
 };
