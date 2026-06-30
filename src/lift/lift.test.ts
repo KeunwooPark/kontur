@@ -190,6 +190,38 @@ describe.skipIf(!hasPython())("lift: package imports (Python)", () => {
     expect(codeB).toBe(codeA);
   });
 
+  it("captures package-relative imports verbatim and round-trips", () => {
+    // Relative imports (`from .x import y`) used to be refused outright — they
+    // front-ran every real file. Now the leading dots ride on the source
+    // specifier so the import survives the parse and re-emits unchanged.
+    const src = [
+      "from .auth import HTTPBasicAuth",
+      "from . import sessions",
+      "from ..models import Response",
+      "",
+      "",
+      "def f(n: int) -> None:",
+      "    x = HTTPBasicAuth(n)",
+      "    print(x)",
+      "",
+    ].join("\n");
+
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.imports?.map((i) => ({ source: i.source, bindings: i.bindings }))).toEqual([
+      { source: ".auth", bindings: [{ kind: "named", imported: "HTTPBasicAuth", local: "HTTPBasicAuth" }] },
+      { source: ".", bindings: [{ kind: "named", imported: "sessions", local: "sessions" }] },
+      { source: "..models", bindings: [{ kind: "named", imported: "Response", local: "Response" }] },
+    ]);
+
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("from .auth import HTTPBasicAuth");
+    expect(codeA).toContain("from . import sessions");
+    expect(codeA).toContain("from ..models import Response");
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+
   it("refuses a star import (binds names we cannot see)", () => {
     const src = "from os import *\n\n\ndef f() -> None:\n    pass\n";
     expect(() => liftPython(src)).toThrow();
