@@ -122,7 +122,10 @@ export const Node = z.discriminatedUnion("kind", [
   // data-out "item" (the bound element, read by the body); control-out "body" and
   // "done". The third loop sibling: `loop` counts a range, `while` tests a
   // predicate, `foreach` walks the elements of a value. `label` is the item var.
-  z.object({ ...nodeBase, kind: z.literal("foreach"), label: z.string() }).strict(),
+  // When the loop target is a tuple-unpack (`for k, v in items:`), `names` (≥2)
+  // holds the per-element bindings and the bound elements come out on data-out
+  // ports "0".."n-1" (each read by var name) instead of "item"; `label` is unused.
+  z.object({ ...nodeBase, kind: z.literal("foreach"), label: z.string(), names: z.array(z.string().min(1)).min(2).optional() }).strict(),
   // Protected execution (try/catch). Control-in enters the protected block;
   // control-out "body" runs it, "catch" runs the handler if it raises, and "done"
   // is the continuation after either path. Data-out "error" is the caught value
@@ -168,8 +171,11 @@ export const Node = z.discriminatedUnion("kind", [
   // "key"+"value" (the dict entry), plus an optional "cond" (an `if` filter);
   // data-out "item" (the bound variable, read by elem/key/value/cond) and one
   // default out (the resulting collection). `label` is the bound variable name.
-  // Multi-generator and tuple-unpack targets are refused at lift (deferred).
-  z.object({ ...nodeBase, kind: z.literal("itercomp"), label: z.string(), form: z.enum(["list", "set", "dict", "generator"]) }).strict(),
+  // When the target is a tuple-unpack (`{k: v for k, v in items}`), `names` (≥2)
+  // holds the per-element bindings and the bound elements come out on data-out
+  // ports "0".."n-1" (each read by var name) instead of "item"; `label` is unused.
+  // Multi-generator targets are refused at lift (deferred).
+  z.object({ ...nodeBase, kind: z.literal("itercomp"), label: z.string(), form: z.enum(["list", "set", "dict", "generator"]), names: z.array(z.string().min(1)).min(2).optional() }).strict(),
   // A pure collection literal — the sibling of `array` (the list literal) for the
   // other three built-in collection types. `form` selects which: a tuple `(…)`,
   // set `{…}`, or dict `{k: v, …}`. Pins: for tuple/set, data-in "0".."n-1" (the

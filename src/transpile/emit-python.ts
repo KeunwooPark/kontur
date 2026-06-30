@@ -68,7 +68,7 @@ function expr(e: Expr): string {
       return `[${expr(e.elem)} for ${v} in range(${expr(e.from)}, ${expr(e.to)} + 1)]`;
     }
     case "itercomp": {
-      const v = snake(e.varName);
+      const v = e.varNames ? e.varNames.map(snake).join(", ") : snake(e.varName!);
       const head = `for ${v} in ${expr(e.iter)}${e.cond ? ` if ${expr(e.cond)}` : ""}`;
       if (e.form === "dict") return `{${expr(e.key!)}: ${expr(e.value!)} ${head}}`;
       const body = expr(e.elem!);
@@ -157,7 +157,8 @@ function stmt(s: Stmt, indent: string): string[] {
       return out;
     }
     case "foreach": {
-      const out = [`${indent}for ${snake(s.varName)} in ${expr(s.iter)}:`];
+      const target = s.names ? s.names.map(snake).join(", ") : snake(s.varName!);
+      const out = [`${indent}for ${target} in ${expr(s.iter)}:`];
       for (const b of s.body) out.push(...stmt(b, indent + "    "));
       return out;
     }

@@ -202,12 +202,13 @@ class ModuleCompiler {
 
       if (node.kind === "foreach") {
         // The item binding is resolved by the body, so register it (like a loop's
-        // index) BEFORE recursing into the body.
+        // index) BEFORE recursing into the body. A tuple-unpack target (`names`)
+        // binds per-element out-ports "0".."n-1"; a single target binds "item".
         const v = identifier(node.label) || node.id;
         this.loopVar.set(node.id, v);
         stmts.push({
           t: "foreach",
-          varName: v,
+          ...(node.names ? { names: node.names } : { varName: v }),
           iter: this.resolveInput(node.id, "iter"),
           body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
         });
@@ -363,15 +364,16 @@ class ModuleCompiler {
           elem: this.resolveInput(node.id, "elem"),
         };
       case "itercomp": {
-        const varName = identifier(node.label) || node.id;
+        // A tuple-unpack target reconstructs `varNames`; a single target `varName`.
+        const target = node.names ? { varNames: node.names } : { varName: identifier(node.label) || node.id };
         const iter = this.resolveInput(node.id, "iter");
         const cond = this.dataSrc.has(`${node.id}:cond`)
           ? { cond: this.resolveInput(node.id, "cond") }
           : {};
         if (node.form === "dict") {
-          return { t: "itercomp", form: "dict", varName, iter, key: this.resolveInput(node.id, "key"), value: this.resolveInput(node.id, "value"), ...cond };
+          return { t: "itercomp", form: "dict", ...target, iter, key: this.resolveInput(node.id, "key"), value: this.resolveInput(node.id, "value"), ...cond };
         }
-        return { t: "itercomp", form: node.form, varName, iter, elem: this.resolveInput(node.id, "elem"), ...cond };
+        return { t: "itercomp", form: node.form, ...target, iter, elem: this.resolveInput(node.id, "elem"), ...cond };
       }
       case "function": {
         if (node.op && BINARY_OPS.has(node.op)) {
@@ -457,13 +459,21 @@ class ModuleCompiler {
     if (src.kind === "comprehension" && ep.port === "index") {
       return { t: "var", name: identifier(src.label) || src.id };
     }
-    // An iterable comprehension's bound element, read by elem/key/value/cond.
+    // An iterable comprehension's bound element, read by elem/key/value/cond. A
+    // tuple-unpack target reads element ports "0".."n-1"; a single target "item".
     if (src.kind === "itercomp" && ep.port === "item") {
       return { t: "var", name: identifier(src.label) || src.id };
     }
-    // A foreach's bound element, read inside its body.
+    if (src.kind === "itercomp" && src.names && ep.port !== undefined) {
+      return { t: "var", name: src.names[Number(ep.port)] ?? src.id };
+    }
+    // A foreach's bound element, read inside its body. Single target → "item";
+    // tuple-unpack → element ports "0".."n-1" mapped to each unpacked name.
     if (src.kind === "foreach" && ep.port === "item") {
       return { t: "var", name: this.loopVar.get(src.id) ?? src.id };
+    }
+    if (src.kind === "foreach" && src.names && ep.port !== undefined) {
+      return { t: "var", name: src.names[Number(ep.port)] ?? src.id };
     }
     // A try's caught-error binding, read inside its handler.
     if (src.kind === "try" && ep.port === "error") {
