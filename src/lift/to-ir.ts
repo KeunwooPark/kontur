@@ -318,13 +318,18 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
     }
     case "foreach": {
       // The collection-driven loop sibling: the iterable flows in on `iter`, the
-      // bound element out on `item`. Like a counted loop's index, `item` is bound
+      // bound element out on `item`. Like a counted loop's index, the binding is set
       // BEFORE lowering the body that reads it; the iterable is evaluated in the
-      // enclosing scope, so it is lowered first.
-      const id = newNode(ctx, { kind: "foreach", label: s.varName }, undefined, s.span);
+      // enclosing scope, so it is lowered first. A tuple-unpack target (`names`)
+      // binds each name to its own out-port "0".."n-1" (like an `unpack` node), so
+      // the iterated tuple is destructured per iteration; a single `varName` uses
+      // the "item" port.
+      const node = s.names ? { kind: "foreach" as const, label: s.names.join(", "), names: s.names } : { kind: "foreach" as const, label: s.varName! };
+      const id = newNode(ctx, node, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.iter), `${id}:iter`, "data"]);
       ctx.wires.push([prev, id, "control"]);
-      ctx.varMap.set(s.varName, `${id}:item`);
+      if (s.names) s.names.forEach((n, i) => ctx.varMap.set(n, `${id}:${i}`));
+      else ctx.varMap.set(s.varName!, `${id}:item`);
       lowerBlock(ctx, s.body, `${id}:body`);
       return `${id}:done`;
     }
@@ -537,10 +542,15 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       // sibling of `foreach`. The iterable is evaluated in the enclosing scope, so
       // it is lowered first; the bound variable is then bound while the body parts
       // are lowered and restored afterwards so it never leaks past the comprehension.
-      const id = newNode(ctx, { kind: "itercomp", label: e.varName, form: e.form });
+      // A tuple-unpack target (`varNames`) binds each name to its own out-port
+      // "0".."n-1" (like an `unpack` node); a single `varName` uses the "item" port.
+      const boundNames = e.varNames ?? [e.varName!];
+      const node = e.varNames ? { kind: "itercomp" as const, label: e.varNames.join(", "), form: e.form, names: e.varNames } : { kind: "itercomp" as const, label: e.varName!, form: e.form };
+      const id = newNode(ctx, node);
       ctx.wires.push([lowerExpr(ctx, e.iter), `${id}:iter`, "data"]);
-      const prev = ctx.varMap.get(e.varName);
-      ctx.varMap.set(e.varName, `${id}:item`);
+      const saved = boundNames.map((n) => [n, ctx.varMap.get(n)] as const);
+      if (e.varNames) e.varNames.forEach((n, i) => ctx.varMap.set(n, `${id}:${i}`));
+      else ctx.varMap.set(e.varName!, `${id}:item`);
       if (e.form === "dict") {
         ctx.wires.push([lowerExpr(ctx, e.key!), `${id}:key`, "data"]);
         ctx.wires.push([lowerExpr(ctx, e.value!), `${id}:value`, "data"]);
@@ -548,8 +558,10 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
         ctx.wires.push([lowerExpr(ctx, e.elem!), `${id}:elem`, "data"]);
       }
       if (e.cond) ctx.wires.push([lowerExpr(ctx, e.cond), `${id}:cond`, "data"]);
-      if (prev === undefined) ctx.varMap.delete(e.varName);
-      else ctx.varMap.set(e.varName, prev);
+      for (const [n, prevVal] of saved) {
+        if (prevVal === undefined) ctx.varMap.delete(n);
+        else ctx.varMap.set(n, prevVal);
+      }
       return id;
     }
     case "call": {
@@ -751,7 +763,10 @@ function walkForLoops(stmts: Stmt[], fnName: string): void {
   stmts.forEach((s, i) => {
     if (s.t === "for" || s.t === "foreach" || s.t === "while") {
       const assigned = assignedNames(s.body);
-      if (s.t !== "while") assigned.delete(s.varName); // the loop var is not carried
+      // The loop var(s) are not carried — a counted `for`'s index, a `foreach`'s
+      // single `varName`, or its tuple-unpack `names`.
+      if (s.t === "for") assigned.delete(s.varName);
+      else if (s.t === "foreach") for (const n of s.names ?? [s.varName!]) assigned.delete(n);
       if (assigned.size > 0) {
         const exposed = upwardExposedReads(s.body);
         const after = new Set<string>();
@@ -863,9 +878,9 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
     exprReads(e, r);
     return r;
   };
-  const nested = (block: Stmt[], loopVar?: string): void => {
+  const nested = (block: Stmt[], ...loopVars: (string | undefined)[]): void => {
     const inner = upwardExposedReads(block);
-    if (loopVar) inner.delete(loopVar);
+    for (const v of loopVars) if (v) inner.delete(v);
     expose(inner);
   };
   for (const s of stmts) {
@@ -884,7 +899,7 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "if": expose(readsOf(s.cond)); nested(s.then); nested(s.else); break;
       case "for": expose(readsOf(s.from)); expose(readsOf(s.to)); nested(s.body, s.varName); break;
       case "while": expose(readsOf(s.cond)); nested(s.body); break;
-      case "foreach": expose(readsOf(s.iter)); nested(s.body, s.varName); break;
+      case "foreach": expose(readsOf(s.iter)); nested(s.body, ...(s.names ?? [s.varName])); break;
       case "try": nested(s.body); nested(s.handler, s.catchParam); break;
     }
   }

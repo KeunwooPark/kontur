@@ -1001,8 +1001,13 @@ describe.skipIf(!hasPython())("lift: Python iterable comprehensions (item 11)", 
     );
   });
 
-  it("refuses a tuple-unpacking comprehension target (deferred to the unpacking item)", () => {
-    expect(() => liftPython("def f(d: dict) -> None:\n    print([k for k, v in d])\n")).toThrow(/tuple unpacking/);
+  it("lifts a dict comprehension with a tuple-unpack target (item 14B) and round-trips", () => {
+    const src = "def f(d: dict) -> dict:\n    return {k: v for k, v in d}\n";
+    const sys = liftPython(src);
+    const node = sys.modules["f"]!.interior.nodes.find((n) => n.kind === "itercomp")!;
+    expect((node as { names?: string[] }).names).toEqual(["k", "v"]);
+    expect(transpile(sys, "python")).toContain("{k: v for k, v in d}");
+    expect(transpile(sys, "ts")).toContain("Object.fromEntries(d.map(([k, v]) => [k, v]))");
   });
 });
 
@@ -1296,6 +1301,49 @@ describe.skipIf(!hasPython())("lift: tuple unpacking assignment (item 14, Python
   });
 });
 
+describe.skipIf(!hasPython())("lift: for-target tuple unpacking (item 14B, Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("lifts `for k, v in items:` to a foreach with names and round-trips", () => {
+    // The requests status_codes.py shape: `for code, titles in _codes.items()`.
+    const { sys, py } = rt(
+      "def f(items: list) -> None:\n    for k, v in items:\n        print(k)\n        print(v)\n",
+    );
+    expect(py).toContain("for k, v in items:");
+    const node = sys.modules["f"]!.interior.nodes.find((n) => n.kind === "foreach")!;
+    expect((node as { names?: string[] }).names).toEqual(["k", "v"]);
+    expect(nodeKinds(sys, "f")).toContain("foreach");
+  });
+
+  it("binds each unpacked name independently inside the body", () => {
+    const { py } = rt(
+      "def f(pairs: list) -> None:\n    for a, b, c in pairs:\n        print(a)\n        print(c)\n",
+    );
+    expect(py).toContain("for a, b, c in pairs:");
+  });
+
+  it("cross-compiles a for-target unpack to TS array destructuring", () => {
+    const sys = liftPython("def f(items: list) -> None:\n    for k, v in items:\n        print(k)\n");
+    expect(transpile(sys, "ts")).toContain("for (const [k, v] of items) {");
+  });
+
+  it("refuses a starred for-target `for a, *rest in xs:` (deferred)", () => {
+    expect(() => liftPython("def f(xs: list) -> None:\n    for a, *rest in xs:\n        print(a)\n")).toThrow(/starred unpack/);
+  });
+
+  it("refuses a nested for-target `for (a, b), c in xs:` (deferred)", () => {
+    expect(() => liftPython("def f(xs: list) -> None:\n    for (a, b), c in xs:\n        print(c)\n")).toThrow(/nested unpack/);
+  });
+});
+
 describe("lift: tuple unpacking round-trips from TypeScript (item 14)", () => {
   it("lifts `const [a, b] = f(x)` to an `unpack` node and is a fixed point", () => {
     const src = "export function g(x: number): number {\n  const [a, b] = parse(x);\n  return a;\n}\n";
@@ -1569,7 +1617,7 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(() => liftTypeScript(src)).toThrow(/try\/finally/);
   });
 
-  it("refuses a for-of with a destructuring binding (foreach binds a single name)", () => {
+  it("lifts a for-of with a [a, b] destructuring binding (item 14B) and round-trips", () => {
     const src = [
       "export function f(pairs: number[][]): void {",
       "  for (const [a, b] of pairs) {",
@@ -1577,7 +1625,10 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
       "  }",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/for-of binding/);
+    const sys = liftTypeScript(src);
+    const node = sys.modules["f"]!.interior.nodes.find((n) => n.kind === "foreach")!;
+    expect((node as { names?: string[] }).names).toEqual(["a", "b"]);
+    expect(transpile(sys, "ts")).toContain("for (const [a, b] of pairs) {");
   });
 
   it("still refuses a return in the middle of a function (non-tail)", () => {

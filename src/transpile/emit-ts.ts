@@ -86,7 +86,7 @@ function expr(e: Expr): string {
       // one-way emit, like the range comprehension above). `if` becomes `.filter`,
       // the element a `.map`; a dict builds entries via `Object.fromEntries`, a set
       // wraps the mapped array, a generator collapses to the same eager array map.
-      const v = camel(e.varName);
+      const v = e.varNames ? `[${e.varNames.map(camel).join(", ")}]` : camel(e.varName!);
       const src = e.cond ? `${expr(e.iter)}.filter((${v}) => ${expr(e.cond)})` : expr(e.iter);
       if (e.form === "dict") return `Object.fromEntries(${src}.map((${v}) => [${expr(e.key!)}, ${expr(e.value!)}]))`;
       const mapped = `${src}.map((${v}) => ${expr(e.elem!)})`;
@@ -172,7 +172,8 @@ function stmt(s: Stmt, indent: string): string[] {
       return out;
     }
     case "foreach": {
-      const out = [`${indent}for (const ${camel(s.varName)} of ${expr(s.iter)}) {`];
+      const target = s.names ? `[${s.names.map(camel).join(", ")}]` : camel(s.varName!);
+      const out = [`${indent}for (const ${target} of ${expr(s.iter)}) {`];
       for (const b of s.body) out.push(...stmt(b, indent + "  "));
       out.push(`${indent}}`);
       return out;

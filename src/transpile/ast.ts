@@ -36,8 +36,9 @@ export type Expr =
    *  `[elem for v in iter if cond]`, `{key: value for v in iter}`, `{elem for …}`,
    *  `(elem for …)`. The iterable sibling of the counted-range `comprehension`.
    *  `cond` is an optional `if` filter; `key`/`value` are set for the dict form,
-   *  `elem` for the others. */
-  | { t: "itercomp"; form: "list" | "set" | "dict" | "generator"; varName: string; iter: Expr; cond?: Expr; elem?: Expr; key?: Expr; value?: Expr }
+   *  `elem` for the others. `varNames` (≥2) replaces `varName` when the target is
+   *  a tuple-unpack (`{k: v for k, v in items}`). Exactly one of `varName`/`varNames`. */
+  | { t: "itercomp"; form: "list" | "set" | "dict" | "generator"; varName?: string; varNames?: string[]; iter: Expr; cond?: Expr; elem?: Expr; key?: Expr; value?: Expr }
   /** A tuple `(e0, e1, …)`, set `{e0, …}`, or dict `{k0: v0, …}` literal — the
    *  sibling of `array` (the list literal) for the other built-in collection
    *  types. `form` selects which; `elems` holds the elements for tuple/set,
@@ -94,8 +95,12 @@ export type Stmt = { span?: SourceSpan } & (
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }
   /** Condition-driven loop: `while cond { … }`. */
   | { t: "while"; cond: Expr; body: Stmt[] }
-  /** Collection-driven loop: `for varName of iter { … }` / `for varName in iter:`. */
-  | { t: "foreach"; varName: string; iter: Expr; body: Stmt[] }
+  /** Collection-driven loop: `for varName of iter { … }` / `for varName in iter:`.
+   *  `names` (≥2) replaces `varName` when the loop target is a tuple-unpack
+   *  (`for k, v in items:` / `for (const [k, v] of …)`); `varName` is then ignored.
+   *  Each name binds the corresponding element of the iterated tuple per iteration.
+   *  Exactly one of `varName` / `names` is present. */
+  | { t: "foreach"; varName?: string; names?: string[]; iter: Expr; body: Stmt[] }
   /**
    * Protected execution: `try { body } catch (catchParam) { handler }`. The
    * IR has catch-all semantics (no exception type); `catchParam` is absent when

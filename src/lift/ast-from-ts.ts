@@ -160,6 +160,22 @@ function block(stmt: ts.Statement, sf: ts.SourceFile): Stmt[] {
   return ts.isBlock(stmt) ? stmt.statements.map((s) => liftStmt(s, sf)) : [liftStmt(stmt, sf)];
 }
 
+/** The plain identifier names of an array binding pattern `[a, b]` (≥2). A hole,
+ *  rest, default, or nested pattern is a distinct construct, refused loudly. Shared
+ *  by sequence-unpacking assignment and for-of tuple targets. */
+function arrayBindingNames(pattern: ts.ArrayBindingPattern): string[] {
+  const names: string[] = [];
+  for (const el of pattern.elements) {
+    if (ts.isOmittedExpression(el)) throw new Error("lift(ts): unsupported hole in array destructuring (deferred)");
+    if (el.dotDotDotToken) throw new Error("lift(ts): unsupported rest element in array destructuring (`[a, ...rest]`, deferred)");
+    if (el.initializer) throw new Error("lift(ts): unsupported default in array destructuring (deferred)");
+    if (!ts.isIdentifier(el.name)) throw new Error("lift(ts): unsupported nested array destructuring (only plain names, deferred)");
+    names.push(el.name.text);
+  }
+  if (names.length < 2) throw new Error("lift(ts): unsupported single-element array destructuring (deferred)");
+  return names;
+}
+
 function elseBlock(stmt: ts.Statement | undefined, sf: ts.SourceFile): Stmt[] {
   if (!stmt) return [];
   // `else if` is an IfStatement; wrap so it becomes a nested branch.
@@ -174,16 +190,7 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
     // rest (`[a, ...rest]`), a default (`[a = 1]`), or a nested pattern is a
     // distinct construct with no IR home, refused loudly rather than guessed.
     if (ts.isArrayBindingPattern(decl.name)) {
-      const names: string[] = [];
-      for (const el of decl.name.elements) {
-        if (ts.isOmittedExpression(el)) throw new Error("lift(ts): unsupported hole in array destructuring (deferred)");
-        if (el.dotDotDotToken) throw new Error("lift(ts): unsupported rest element in array destructuring (`[a, ...rest]`, deferred)");
-        if (el.initializer) throw new Error("lift(ts): unsupported default in array destructuring (deferred)");
-        if (!ts.isIdentifier(el.name)) throw new Error("lift(ts): unsupported nested array destructuring (only plain names, deferred)");
-        names.push(el.name.text);
-      }
-      if (names.length < 2) throw new Error("lift(ts): unsupported single-element array destructuring (deferred)");
-      return { t: "destructure", names, value: liftExpr(decl.initializer!, sf) };
+      return { t: "destructure", names: arrayBindingNames(decl.name), value: liftExpr(decl.initializer!, sf) };
     }
     return { t: "let", name: (decl.name as ts.Identifier).text, expr: liftExpr(decl.initializer!, sf) };
   }
@@ -222,8 +229,13 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
       throw new Error(`lift(ts): unsupported for-of initializer (expected a single binding)`);
     }
     const decl = s.initializer.declarations[0]!;
+    // A single identifier binds `varName`; a `[k, v]` array pattern binds `names`
+    // (tuple-unpack per iteration), reusing the same destructuring rules.
+    if (ts.isArrayBindingPattern(decl.name)) {
+      return { t: "foreach", names: arrayBindingNames(decl.name), iter: liftExpr(s.expression, sf), body: block(s.statement, sf) };
+    }
     if (!ts.isIdentifier(decl.name)) {
-      throw new Error(`lift(ts): unsupported for-of binding (only a single identifier, not a pattern)`);
+      throw new Error(`lift(ts): unsupported for-of binding (only an identifier or [a, b] pattern)`);
     }
     return { t: "foreach", varName: decl.name.text, iter: liftExpr(s.expression, sf), body: block(s.statement, sf) };
   }

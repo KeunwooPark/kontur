@@ -38,6 +38,25 @@ def map_type(node):
     return "any"
 
 
+def unpack_target_names(target):
+    """The list of plain names bound by a tuple/list unpack target (`a, b`), or
+    None if `target` is not a tuple/list. Only plain names are modelled: a starred
+    (`a, *rest`) or nested (`(a, b), c`) target is a distinct construct, refused
+    loudly. Shared by destructuring assignment, for-targets, and comprehensions."""
+    if not isinstance(target, (ast.Tuple, ast.List)):
+        return None
+    if len(target.elts) < 2:
+        raise SystemExit("lift(py): unsupported single-element unpack target (`(a,) = …`, deferred)")
+    names = []
+    for el in target.elts:
+        if isinstance(el, ast.Starred):
+            raise SystemExit("lift(py): unsupported starred unpack target (`a, *rest`, deferred)")
+        if not isinstance(el, ast.Name):
+            raise SystemExit("lift(py): unsupported nested unpack target (only plain names, deferred)")
+        names.append(el.id)
+    return names
+
+
 def span(node):
     """Provenance: the source range a node was lifted from. `line` is 1-based,
     `col` 0-based (CPython's convention). Returns None if positions are absent."""
@@ -187,20 +206,22 @@ def iter_comp(e):
     """A comprehension over an arbitrary iterable -> an `itercomp` expr: the
     value-producing sibling of a `foreach`, covering list/set/dict/generator forms
     with an optional single `if` filter. Distinct from the counted-range list comp
-    above (which keeps its dedicated `comprehension` node). Multiple generators, a
-    tuple-unpack target (`for k, v in ...`), an `async for`, and more than one filter
-    are each a separate construct, refused loudly and deferred (the unpacking item
-    covers the tuple target)."""
+    above (which keeps its dedicated `comprehension` node). A single Name target binds
+    `varName`; a tuple target (`for k, v in ...`) binds `varNames` (the unpacking item).
+    Multiple generators, an `async for`, and more than one filter are each a separate
+    construct, refused loudly and deferred."""
     if len(e.generators) != 1:
         raise SystemExit("lift(py): unsupported multi-generator comprehension (deferred)")
     g = e.generators[0]
     if getattr(g, "is_async", 0):
         raise SystemExit("lift(py): unsupported async comprehension (deferred)")
-    if not isinstance(g.target, ast.Name):
-        raise SystemExit("lift(py): unsupported comprehension target (tuple unpacking, deferred to the unpacking item)")
     if len(g.ifs) > 1:
         raise SystemExit("lift(py): unsupported comprehension with multiple if-filters (deferred)")
-    out = {"t": "itercomp", "form": ITERCOMP_FORM[type(e)], "varName": g.target.id, "iter": expr(g.iter)}
+    out = {"t": "itercomp", "form": ITERCOMP_FORM[type(e)], "iter": expr(g.iter)}
+    if isinstance(g.target, ast.Name):
+        out["varName"] = g.target.id
+    else:
+        out["varNames"] = unpack_target_names(g.target)
     if isinstance(e, ast.DictComp):
         out["key"] = expr(e.key)
         out["value"] = expr(e.value)
@@ -281,17 +302,7 @@ def _stmt(s):
     # Only plain names are modelled: a starred target (`a, *rest = …`) or a nested
     # one (`(a, b), c = …`) is a distinct construct with no IR home, refused loudly.
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], (ast.Tuple, ast.List)):
-        elts = s.targets[0].elts
-        if len(elts) < 2:
-            raise SystemExit("lift(py): unsupported single-element unpack target (`(a,) = …`, deferred)")
-        names = []
-        for el in elts:
-            if isinstance(el, ast.Starred):
-                raise SystemExit("lift(py): unsupported starred unpack target (`a, *rest = …`, deferred)")
-            if not isinstance(el, ast.Name):
-                raise SystemExit("lift(py): unsupported nested unpack target (only plain names, deferred)")
-            names.append(el.id)
-        return {"t": "destructure", "names": names, "value": expr(s.value)}
+        return {"t": "destructure", "names": unpack_target_names(s.targets[0]), "value": expr(s.value)}
     # An attribute-assignment target on an arbitrary receiver: `obj.attr = v` (the
     # `self.attr` case was taken above as stateSet). The write-side sibling of an
     # `attr` read — a control-sequenced effect with the receiver wired in.
@@ -361,19 +372,18 @@ def _stmt(s):
             "body": [stmt(x) for x in s.body],
         }
     if isinstance(s, ast.For):
-        # A non-range `for x in iter:` is a collection-driven loop (foreach). Only
-        # a single Name target is modelled; tuple unpacking or a for/else clause is
-        # control flow with no IR node, so refuse it rather than drop it.
-        if not isinstance(s.target, ast.Name):
-            raise SystemExit("lift(py): unsupported for-target (only a single name, not unpacking)")
+        # A non-range `for x in iter:` is a collection-driven loop (foreach). A
+        # single Name target binds `varName`; a tuple/list target (`for k, v in …`)
+        # binds `names` (the unpacking item). A for/else clause is control flow with
+        # no IR node, so refuse it rather than drop it.
         if s.orelse:
             raise SystemExit("lift(py): unsupported for/else (no IR node for the else clause)")
-        return {
-            "t": "foreach",
-            "varName": s.target.id,
-            "iter": expr(s.iter),
-            "body": [stmt(x) for x in s.body],
-        }
+        out = {"t": "foreach", "iter": expr(s.iter), "body": [stmt(x) for x in s.body]}
+        if isinstance(s.target, ast.Name):
+            out["varName"] = s.target.id
+        else:
+            out["names"] = unpack_target_names(s.target)
+        return out
     if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call):
         # `print(x)` is the one call with a dedicated effect node; every other call
         # statement (plain, package, or a self/local method call) routes through
