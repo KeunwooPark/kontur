@@ -1,6 +1,6 @@
 /** Render the neutral AST as Python 3. */
 import type { Op } from "../ir/schema.js";
-import type { Class, Expr, Fn, Import, Program, Stmt } from "./ast.js";
+import type { Class, Expr, Fn, Import, Param, Program, Stmt } from "./ast.js";
 import { pascal, snake } from "./naming.js";
 
 const BIN: Partial<Record<Op, string>> = {
@@ -137,10 +137,35 @@ function pyDocLiteral(s: string): string {
   return JSON.stringify(s);
 }
 
+/** One parameter, with its annotation (omitted for "any"), `*`/`**` prefix, and
+ *  default. Python pairs an annotated default with spaces (`x: int = 1`) and a
+ *  bare one without (`x=1`); the parser ignores the difference, so either re-lifts. */
+function pyParam(p: Param): string {
+  const anno = p.type === "any" ? "" : `: ${pyType(p.type)}`;
+  if (p.variadic === "args") return `*${snake(p.name)}${anno}`;
+  if (p.variadic === "kwargs") return `**${snake(p.name)}${anno}`;
+  const dflt = p.default === undefined ? "" : anno ? ` = ${expr(p.default)}` : `=${expr(p.default)}`;
+  return `${snake(p.name)}${anno}${dflt}`;
+}
+
+/** Render the parameter list, inserting a bare `*` before keyword-only params
+ *  when no `*args` already separates them. A method takes an implicit `self`. */
+function pyParams(f: Fn): string {
+  const parts: string[] = f.isMethod ? ["self"] : [];
+  let starEmitted = false;
+  for (const p of f.params) {
+    if (p.variadic === "args") starEmitted = true;
+    else if (p.keywordOnly && p.variadic === undefined && !starEmitted) {
+      parts.push("*");
+      starEmitted = true;
+    }
+    parts.push(pyParam(p));
+  }
+  return parts.join(", ");
+}
+
 function fn(f: Fn, indent = ""): string {
-  const declared = f.params.map((p) => `${snake(p.name)}: ${pyType(p.type)}`);
-  // A method takes an implicit leading `self`.
-  const params = (f.isMethod ? ["self", ...declared] : declared).join(", ");
+  const params = pyParams(f);
   const ret =
     f.returns.length === 0 ? "None"
     : f.returns.length === 1 ? pyType(f.returns[0]!.type)

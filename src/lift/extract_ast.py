@@ -231,35 +231,56 @@ def is_void(rt):
     return False
 
 
-def reject_unsupported_signature(f):
-    """Refuse signature features the IR cannot yet carry, rather than dropping
-    them silently. Today only plain positional params (with a type) survive; a
-    default value, *args/**kwargs, or keyword-/positional-only param would lift
-    to a lie. Refuse loudly until full signatures land (roadmap item 4)."""
+def default_expr(node):
+    """A parameter default, restricted to the forms the IR carries (ParamDefault):
+    a literal or a bare name reference — the two forms real signatures use almost
+    exclusively. A richer default expression refuses loudly rather than lifting to
+    a lie (deferred to a later roadmap item)."""
+    if isinstance(node, ast.Constant):
+        return {"t": "lit", "value": node.value}
+    if isinstance(node, ast.Name):
+        return {"t": "var", "name": node.id}
+    raise SystemExit("lift(py): unsupported default value (only a literal or a bare name is modelled yet)")
+
+
+def params_of(f, is_method):
+    """The full parameter list as neutral-AST params, in declaration order:
+    positional(/keyword) params, then `*args`, then keyword-only params, then
+    `**kwargs`. Defaults, the `*`/`**` markers, and keyword-only-ness are captured
+    so the signature round-trips. Positional-only params (the rare `x, /`) have no
+    IR home yet and refuse loudly."""
     a = f.args
-    if a.vararg:
-        raise SystemExit("lift(py): unsupported *args (not yet in the IR)")
-    if a.kwarg:
-        raise SystemExit("lift(py): unsupported **kwargs (not yet in the IR)")
-    if a.kwonlyargs:
-        # kw_defaults carries one slot per keyword-only arg (None when absent),
-        # so check kwonlyargs itself rather than that always-populated list.
-        raise SystemExit("lift(py): unsupported keyword-only parameter (not yet in the IR)")
     if a.posonlyargs:
         raise SystemExit("lift(py): unsupported positional-only parameter (not yet in the IR)")
-    if a.defaults:
-        raise SystemExit("lift(py): unsupported default parameter value (not yet in the IR)")
+    normal = a.args
+    # A method's leading `self` is implicit in the IR; drop it. Defaults align to
+    # the tail of `normal`, so removing the (never-defaulted) head keeps them lined up.
+    if is_method and normal and normal[0].arg == "self":
+        normal = normal[1:]
+    params = []
+    first_default = len(normal) - len(a.defaults)
+    for i, arg in enumerate(normal):
+        p = {"name": arg.arg, "type": map_type(arg.annotation)}
+        if i >= first_default:
+            p["default"] = default_expr(a.defaults[i - first_default])
+        params.append(p)
+    if a.vararg:
+        params.append({"name": a.vararg.arg, "type": map_type(a.vararg.annotation), "variadic": "args"})
+    # kw_defaults carries one slot per keyword-only arg (None when it has no default).
+    for arg, dflt in zip(a.kwonlyargs, a.kw_defaults):
+        p = {"name": arg.arg, "type": map_type(arg.annotation), "keywordOnly": True}
+        if dflt is not None:
+            p["default"] = default_expr(dflt)
+        params.append(p)
+    if a.kwarg:
+        params.append({"name": a.kwarg.arg, "type": map_type(a.kwarg.annotation), "variadic": "kwargs"})
+    return params
 
 
 def func(f, is_method=False):
     if f.decorator_list:
         raise SystemExit("lift(py): unsupported decorator (not yet in the IR)")
-    reject_unsupported_signature(f)
-    args = f.args.args
-    # A method's leading `self` is implicit in the IR; drop it.
-    if is_method and args and args[0].arg == "self":
-        args = args[1:]
-    params = [{"name": a.arg, "type": map_type(a.annotation)} for a in args]
+    params = params_of(f, is_method)
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
     doc, body = docstring_of(f.body)
     out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in body]}

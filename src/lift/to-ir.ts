@@ -182,7 +182,15 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
 
   const ports: Port[] = [{ name: "exec", type: "exec", io: "in", wire: "control" }];
   for (const p of fn.params) {
-    ports.push({ name: p.name, type: p.type, io: "in", wire: "data" });
+    ports.push({
+      name: p.name,
+      type: p.type,
+      io: "in",
+      wire: "data",
+      ...(p.default !== undefined ? { default: p.default } : {}),
+      ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
+      ...(p.keywordOnly ? { keywordOnly: true } : {}),
+    });
     ctx.varMap.set(p.name, `P:${p.name}`);
   }
 

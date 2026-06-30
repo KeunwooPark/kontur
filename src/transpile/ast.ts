@@ -75,10 +75,26 @@ export type Stmt = { span?: SourceSpan } & (
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] }
 );
 
+/**
+ * A parameter default — a literal or a bare name reference, the subset the IR
+ * carries (see `ParamDefault` in ir/schema.ts). A subtype of `Expr`, so the
+ * emitters render it with their existing `expr()`.
+ */
+export type DefaultValue =
+  | { t: "lit"; value: string | number | boolean | null }
+  | { t: "var"; name: string };
+
 export interface Param {
   name: string;
-  /** IR type label (e.g. "int", "User"); emitters map it per backend. */
+  /** IR type label (e.g. "int", "User"); emitters map it per backend. "any" ⇒
+   *  no annotation in source (an unannotated `*args` / `def f(x):`). */
   type: string;
+  /** Default value (`x = 1`), absent when the parameter is required. */
+  default?: DefaultValue;
+  /** `*args` ("args") / `**kwargs` ("kwargs") / TS rest ("args"). */
+  variadic?: "args" | "kwargs";
+  /** A Python keyword-only parameter (declared after `*`). */
+  keywordOnly?: boolean;
 }
 
 export interface Fn {

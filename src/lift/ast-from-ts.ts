@@ -3,7 +3,7 @@
  * TypeScript compiler API. Handles the subset our emitter produces.
  */
 import * as ts from "typescript";
-import type { Class, Expr, Field, Fn, Import, ImportBinding, Param, Program, Stmt } from "../transpile/ast.js";
+import type { Class, DefaultValue, Expr, Field, Fn, Import, ImportBinding, Param, Program, Stmt } from "../transpile/ast.js";
 import type { Op } from "../ir/schema.js";
 
 export function parseTypeScript(source: string): Program {
@@ -108,16 +108,28 @@ function liftCallable(
   isMethod: boolean,
   doc: string | undefined,
 ): Fn {
-  const params: Param[] = parameters.map((p) => ({
-    name: (p.name as ts.Identifier).text,
-    type: mapType(p.type),
-  }));
+  const params: Param[] = parameters.map((p) => {
+    const param: Param = { name: (p.name as ts.Identifier).text, type: mapType(p.type) };
+    // A `...rest` param is variadic; TS has one rest kind, modelled as "args".
+    if (p.dotDotDotToken) param.variadic = "args";
+    if (p.initializer) param.default = liftDefault(p.initializer, sf);
+    return param;
+  });
   const returns =
     !type || type.kind === ts.SyntaxKind.VoidKeyword
       ? []
       : [{ name: "result", type: mapType(type) }];
   const stmts = body.statements.map((s) => liftStmt(s, sf));
   return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}), ...(doc !== undefined ? { doc } : {}) };
+}
+
+/** A parameter default, restricted to the forms the IR carries (a literal or a
+ *  bare name); a richer default expression refuses loudly. */
+function liftDefault(node: ts.Expression, sf: ts.SourceFile): DefaultValue {
+  const e = liftExpr(node, sf);
+  if (e.t === "lit") return { t: "lit", value: e.value as string | number | boolean | null };
+  if (e.t === "var") return { t: "var", name: e.name };
+  throw new Error("lift(ts): unsupported default value (only a literal or a bare name is modelled yet)");
 }
 
 function block(stmt: ts.Statement, sf: ts.SourceFile): Stmt[] {
