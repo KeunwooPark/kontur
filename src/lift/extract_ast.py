@@ -371,6 +371,12 @@ def _stmt(s):
             "to": range_stop_to(args[1]),
             "body": [stmt(x) for x in s.body],
         }
+    if isinstance(s, ast.While):
+        # A condition-driven loop. The IR `while` node carries only a predicate;
+        # a `while...else` is control flow with no IR node, refused rather than dropped.
+        if s.orelse:
+            raise SystemExit("lift(py): unsupported while/else (no IR node for the else clause)")
+        return {"t": "while", "cond": expr(s.test), "body": [stmt(x) for x in s.body]}
     if isinstance(s, ast.For):
         # A non-range `for x in iter:` is a collection-driven loop (foreach). A
         # single Name target binds `varName`; a tuple/list target (`for k, v in …`)
