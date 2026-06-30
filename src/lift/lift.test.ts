@@ -1377,6 +1377,25 @@ describe.skipIf(!hasPython())("lift: Python for-each (collection loop)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
+  const SRC = "def drain(q: list) -> None:\n    while has_next(q):\n        item = pop(q)\n        print(item)\n";
+
+  it("lifts a while → while node and round-trips (Python)", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["drain"]!.interior.nodes.map((n) => n.kind)).toContain("while");
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("while has_next(q):");
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA);
+    // The same IR cross-compiles to a TS while.
+    expect(transpile(sys, "ts")).toContain("while (hasNext(q)) {");
+  });
+
+  it("refuses a while/else (no IR node for the else clause)", () => {
+    expect(() => liftPython("def f(q: list) -> None:\n    while go(q):\n        do(q)\n    else:\n        end()\n")).toThrow(/while\/else/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: Python try/except", () => {
   const SRC = "def risky(n: int) -> None:\n    try:\n        print(n)\n    except Exception as e:\n        print(e)\n";
 
