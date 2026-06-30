@@ -712,6 +712,50 @@ describe("lift: template strings lower to the concat op", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: f-strings lower to the concat op (Python)", () => {
+  const SRC = [
+    "def label(x: int) -> str:",
+    '    return f"value={x}"',
+    "",
+  ].join("\n");
+
+  it("lifts an f-string to a `concat` function node", () => {
+    const sys = liftPython(SRC);
+    expect(validateSystem(sys).ok).toBe(true);
+    const ops = sys.modules["label"]!.interior.nodes
+      .filter((n) => n.kind === "function")
+      .map((n) => (n as { op?: string }).op);
+    expect(ops).toContain("concat");
+  });
+
+  it("Python round-trip (lift → transpile → lift → transpile) is a fixed point", () => {
+    // Like the TS template literal, an f-string lowers to a `concat` chain that
+    // each backend emits as `+`; re-lifting that `+` is a `concat`-free fixed point.
+    const codeA = transpile(liftPython(SRC), "python");
+    expect(codeA).toContain('return ("value=" + x)');
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("folds multiple interpolations and literal segments left-to-right", () => {
+    const src = ['def g(a: int, b: int) -> str:', '    return f"{a}-{b}!"', ""].join("\n");
+    expect(transpile(liftPython(src), "python")).toContain('return (((a + "-") + b) + "!")');
+  });
+
+  it("cross-compiles the same IR to a TS template-equivalent `+` chain", () => {
+    expect(transpile(liftPython(SRC), "ts")).toContain('return ("value=" + x);');
+  });
+
+  it("refuses an f-string conversion / format spec (not representable as concat)", () => {
+    expect(() => liftPython(['def g(x: int) -> str:', '    return f"{x:.2f}"', ""].join("\n"))).toThrow(
+      /format spec|conversion/,
+    );
+    expect(() => liftPython(['def g(x: int) -> str:', '    return f"{x!r}"', ""].join("\n"))).toThrow(
+      /format spec|conversion/,
+    );
+  });
+});
+
 describe("lift: control & collection constructs round-trip (TS)", () => {
   const cases: { name: string; src: string; expectA: string }[] = [
     {

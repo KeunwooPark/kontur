@@ -77,6 +77,8 @@ def expr(e):
         return cur
     if isinstance(e, ast.UnaryOp) and isinstance(e.op, ast.Not):
         return {"t": "un", "op": "not", "x": expr(e.operand)}
+    if isinstance(e, ast.JoinedStr):
+        return joined_str(e)
     if isinstance(e, ast.IfExp):
         return {"t": "cond", "cond": expr(e.test), "then": expr(e.body), "else": expr(e.orelse)}
     if isinstance(e, ast.List):
@@ -120,6 +122,34 @@ def expr(e):
             raise SystemExit("lift(py): unsupported attribute read on an imported name (package value reference, deferred): " + ast.dump(e))
         return {"t": "attr", "obj": expr(e.value), "name": e.attr}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
+
+
+def joined_str(e):
+    """An f-string lowers to a left-folded `concat` chain over its literal text
+    and interpolated expressions — the same shape the TS lifter produces for a
+    template literal (see `liftTemplate` in ast-from-ts.ts). The IR has no
+    interpolation node; `concat` is the string-join effect, emitted as `+` by each
+    backend. Empty fixed parts are dropped so the chain carries only text-producing
+    pieces; an f-string with no parts is the empty string. A conversion (`{x!r}`)
+    or a format spec (`{x:.2f}`) carries formatting that `concat` cannot represent,
+    so refuse it loudly rather than silently drop it."""
+    parts = []
+    for v in e.values:
+        if isinstance(v, ast.Constant):
+            if v.value != "":
+                parts.append({"t": "lit", "value": v.value})
+        elif isinstance(v, ast.FormattedValue):
+            if v.conversion != -1 or v.format_spec is not None:
+                raise SystemExit("lift(py): unsupported f-string conversion/format spec (e.g. {x!r} / {x:.2f}; not representable as concat)")
+            parts.append(expr(v.value))
+        else:
+            raise SystemExit("lift(py): unsupported f-string part: " + ast.dump(v))
+    if not parts:
+        return {"t": "lit", "value": ""}
+    cur = parts[0]
+    for p in parts[1:]:
+        cur = {"t": "bin", "op": "concat", "a": cur, "b": p}
+    return cur
 
 
 def range_stop_to(stop):
