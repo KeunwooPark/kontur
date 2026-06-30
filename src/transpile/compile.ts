@@ -301,6 +301,20 @@ class ModuleCompiler {
         }
         return { t: "array", elems };
       }
+      case "collection": {
+        if (node.form === "dict") {
+          const entries: { key: Expr; value: Expr }[] = [];
+          for (let i = 0; this.dataSrc.has(`${node.id}:key${i}`); i++) {
+            entries.push({ key: this.resolveInput(node.id, `key${i}`), value: this.resolveInput(node.id, `val${i}`) });
+          }
+          return { t: "collection", form: "dict", entries };
+        }
+        const elems: Expr[] = [];
+        for (let i = 0; this.dataSrc.has(`${node.id}:${i}`); i++) {
+          elems.push(this.resolveInput(node.id, String(i)));
+        }
+        return { t: "collection", form: node.form, elems };
+      }
       case "comprehension":
         return {
           t: "comprehension",

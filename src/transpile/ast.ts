@@ -38,6 +38,12 @@ export type Expr =
    *  `cond` is an optional `if` filter; `key`/`value` are set for the dict form,
    *  `elem` for the others. */
   | { t: "itercomp"; form: "list" | "set" | "dict" | "generator"; varName: string; iter: Expr; cond?: Expr; elem?: Expr; key?: Expr; value?: Expr }
+  /** A tuple `(e0, e1, …)`, set `{e0, …}`, or dict `{k0: v0, …}` literal — the
+   *  sibling of `array` (the list literal) for the other built-in collection
+   *  types. `form` selects which; `elems` holds the elements for tuple/set,
+   *  `entries` the ordered key/value pairs for dict (mirroring `itercomp`'s
+   *  elem-vs-key/value split). An empty literal carries an empty `elems`/`entries`. */
+  | { t: "collection"; form: "tuple" | "set" | "dict"; elems?: Expr[]; entries?: { key: Expr; value: Expr }[] }
   /**
    * A call to a generated function: a helper (stub) or another module. When
    * `external` is set the callee is an imported package symbol — its name is a

@@ -34,6 +34,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "const", glyph: "#", label: "const" },
   { kind: "select", glyph: "⋔", label: "select — value conditional" },
   { kind: "array", glyph: "▦", label: "list literal" },
+  { kind: "collection", glyph: "⊞", label: "collection literal" },
   { kind: "comprehension", glyph: "∀", label: "comprehension" },
   { kind: "itercomp", glyph: "∋", label: "iterable comprehension" },
   { kind: "module", glyph: "⧉", label: "module" },
@@ -127,6 +128,7 @@ export const paper: Theme = {
     module: { fill: "#fce8dd", stroke: "#d55e00" }, // vermillion
     // collection family — one shared teal hue for list-valued producers.
     array: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    collection: { fill: "#daf0f3", stroke: "#0a7d8c" },
     comprehension: { fill: "#daf0f3", stroke: "#0a7d8c" },
     itercomp: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // state family — one shared indigo hue so attributes + their accessors read
@@ -169,6 +171,7 @@ export const ink: Theme = {
     select: { fill: "#33270f", stroke: "#d09a3a" },
     module: { fill: "#0f2e33", stroke: "#36c6d6" },
     array: { fill: "#10303a", stroke: "#2bb5c9" },
+    collection: { fill: "#10303a", stroke: "#2bb5c9" },
     comprehension: { fill: "#10303a", stroke: "#2bb5c9" },
     itercomp: { fill: "#10303a", stroke: "#2bb5c9" },
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },

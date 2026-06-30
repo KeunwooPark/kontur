@@ -87,6 +87,22 @@ def expr(e):
         return {"t": "cond", "cond": expr(e.test), "then": expr(e.body), "else": expr(e.orelse)}
     if isinstance(e, ast.List):
         return {"t": "array", "elems": [expr(el) for el in e.elts]}
+    # Tuple/set/dict literals -> a `collection` node (the array sibling). A starred
+    # element (`[*xs]`/`(*xs,)`) or dict-spread (`{**d}`) is a different construct
+    # with no IR home yet, so refuse it loudly rather than drop it.
+    if isinstance(e, ast.Tuple):
+        if any(isinstance(el, ast.Starred) for el in e.elts):
+            raise SystemExit("lift(py): unsupported starred element in a tuple literal (deferred)")
+        return {"t": "collection", "form": "tuple", "elems": [expr(el) for el in e.elts]}
+    if isinstance(e, ast.Set):
+        if any(isinstance(el, ast.Starred) for el in e.elts):
+            raise SystemExit("lift(py): unsupported starred element in a set literal (deferred)")
+        return {"t": "collection", "form": "set", "elems": [expr(el) for el in e.elts]}
+    if isinstance(e, ast.Dict):
+        if any(k is None for k in e.keys):
+            raise SystemExit("lift(py): unsupported dict-unpacking entry (`{**d}`, deferred)")
+        return {"t": "collection", "form": "dict",
+                "entries": [{"key": expr(k), "value": expr(v)} for k, v in zip(e.keys, e.values)]}
     if (
         isinstance(e, ast.ListComp)
         and len(e.generators) == 1

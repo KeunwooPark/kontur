@@ -47,6 +47,18 @@ function expr(e: Expr): string {
     case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.then)} if ${expr(e.cond)} else ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
+    case "collection": {
+      if (e.form === "dict") {
+        const entries = e.entries ?? [];
+        return `{${entries.map((en) => `${expr(en.key)}: ${expr(en.value)}`).join(", ")}}`;
+      }
+      const items = (e.elems ?? []).map(expr);
+      // Empty set must be `set()` — `{}` is an empty dict. A single-element tuple
+      // needs the trailing comma to stay a tuple rather than a parenthesised value.
+      if (e.form === "set") return items.length === 0 ? "set()" : `{${items.join(", ")}}`;
+      if (items.length === 1) return `(${items[0]},)`;
+      return `(${items.join(", ")})`;
+    }
     case "comprehension": {
       // Inclusive range → range(from, to + 1), the inverse the lifter expects.
       const v = snake(e.varName);

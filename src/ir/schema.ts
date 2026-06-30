@@ -170,6 +170,12 @@ export const Node = z.discriminatedUnion("kind", [
   // default out (the resulting collection). `label` is the bound variable name.
   // Multi-generator and tuple-unpack targets are refused at lift (deferred).
   z.object({ ...nodeBase, kind: z.literal("itercomp"), label: z.string(), form: z.enum(["list", "set", "dict", "generator"]) }).strict(),
+  // A pure collection literal — the sibling of `array` (the list literal) for the
+  // other three built-in collection types. `form` selects which: a tuple `(…)`,
+  // set `{…}`, or dict `{k: v, …}`. Pins: for tuple/set, data-in "0".."n-1" (the
+  // elements); for dict, data-in "key0","val0","key1","val1",… (the entries,
+  // paired and in source order); one data out. An empty literal has no in-pins.
+  z.object({ ...nodeBase, kind: z.literal("collection"), label: z.string(), form: z.enum(["tuple", "set", "dict"]) }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
   // `call`, when present, is the name the caller invokes this link by, used when
   // it differs from the target's declared name: an import alias (`import { f as g }`
