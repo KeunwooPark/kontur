@@ -1396,6 +1396,46 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: break / continue (item 17)", () => {
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("lifts a trailing break → break node and round-trips (Python fixed point)", () => {
+    const sys = liftPython("def f(items: list) -> None:\n    for x in items:\n        print(x)\n        break\n");
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(nodeKinds(sys, "f")).toContain("break");
+    const py = transpile(sys, "python");
+    expect(py).toContain("break");
+    expect(transpile(liftPython(py), "python")).toBe(py);
+    expect(transpile(sys, "ts")).toContain("break;");
+  });
+
+  it("lifts a guarded continue and is a fixed point after the guard fold", () => {
+    const sys = liftPython("def f(items: list) -> None:\n    for x in items:\n        if bad(x):\n            continue\n        print(x)\n");
+    expect(nodeKinds(sys, "f")).toContain("continue");
+    const py = transpile(sys, "python");
+    expect(py).toContain("continue");
+    // The guard fold rewrites `if c: continue` + rest into if/else; stable thereafter.
+    expect(transpile(liftPython(py), "python")).toBe(py);
+  });
+
+  it("round-trips break / continue from TypeScript", () => {
+    const src = "export function f(xs: number[]): void {\n  for (const x of xs) {\n    if (x > 0) {\n      continue;\n    }\n    break;\n  }\n}\n";
+    const sys = liftTypeScript(src);
+    expect(nodeKinds(sys, "f")).toContain("break");
+    expect(nodeKinds(sys, "f")).toContain("continue");
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("continue;");
+    expect(ts).toContain("break;");
+  });
+
+  it("refuses a labeled break (no IR node)", () => {
+    expect(() =>
+      liftTypeScript("export function f(xs: number[]): void {\n  outer: for (const x of xs) {\n    break outer;\n  }\n}\n"),
+    ).toThrow();
+  });
+});
+
 describe.skipIf(!hasPython())("lift: Python try/except", () => {
   const SRC = "def risky(n: int) -> None:\n    try:\n        print(n)\n    except Exception as e:\n        print(e)\n";
 

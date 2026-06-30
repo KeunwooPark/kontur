@@ -22,7 +22,7 @@ import { derivePins, portId, boundaryPortId, pinKey, type Pin } from "./ports.js
 // --- output geometry -------------------------------------------------------
 
 export type NodeKind =
-  | "function" | "method" | "branch" | "loop" | "while" | "foreach" | "try" | "with" | "assert" | "throw" | "rethrow" | "effect" | "const" | "module"
+  | "function" | "method" | "branch" | "loop" | "while" | "foreach" | "try" | "with" | "assert" | "throw" | "rethrow" | "break" | "continue" | "effect" | "const" | "module"
   | "select" | "array" | "collection" | "comprehension" | "itercomp" | "index" | "slice"
   | "state" | "stateGet" | "stateSet" | "attrGet" | "attrSet" | "indexSet" | "unpack"
   | "boundary";

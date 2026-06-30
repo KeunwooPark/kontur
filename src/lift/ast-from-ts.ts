@@ -239,6 +239,14 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
     }
     return { t: "foreach", varName: decl.name.text, iter: liftExpr(s.expression, sf), body: block(s.statement, sf) };
   }
+  if (ts.isBreakStatement(s)) {
+    if (s.label) throw new Error("lift(ts): unsupported labeled break (no IR node)");
+    return { t: "break" };
+  }
+  if (ts.isContinueStatement(s)) {
+    if (s.label) throw new Error("lift(ts): unsupported labeled continue (no IR node)");
+    return { t: "continue" };
+  }
   if (ts.isThrowStatement(s)) {
     // Two raising shapes are modelled, mirroring the two IR nodes:
     //   `throw new Error(msg)` → `throw`  (construct a fresh error from a message)

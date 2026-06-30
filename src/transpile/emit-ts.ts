@@ -200,6 +200,8 @@ function stmt(s: Stmt, indent: string): string[] {
       // No TS `assert` statement; cross-compile ONE-WAY to `console.assert`.
       return [`${indent}console.assert(${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""});`];
     }
+    case "break": return [`${indent}break;`];
+    case "continue": return [`${indent}continue;`];
   }
 }
 

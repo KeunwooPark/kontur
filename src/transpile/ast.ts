@@ -139,6 +139,12 @@ export type Stmt = { span?: SourceSpan } & (
   | { t: "return"; expr: Expr }
   /** Return several named values (multi-output module). */
   | { t: "returnObject"; fields: { name: string; expr: Expr }[] }
+  /** Exit the nearest enclosing loop (`break`). Terminal: control leaves the
+   *  block, so nothing falls through after it (like `throw`). */
+  | { t: "break" }
+  /** Skip to the next iteration of the nearest enclosing loop (`continue`).
+   *  Terminal in its block, like `break`. */
+  | { t: "continue" }
 );
 
 /**
