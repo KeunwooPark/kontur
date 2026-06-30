@@ -11,7 +11,7 @@
  * hyperlinks; this function knows nothing about navigation.
  */
 import type { CanvasLayout, LaidOutNode, LaidOutPort } from "./layout.js";
-import { defaultTheme, KINDS, type StyledKind, type Theme } from "./theme.js";
+import { defaultTheme, EXTERNAL_GLYPH, KINDS, type StyledKind, type Theme } from "./theme.js";
 
 /** Per-kind glyph — structural (the node's identity), so it is not themed. */
 const GLYPH = Object.fromEntries(KINDS.map((k) => [k.kind, k.glyph])) as Record<StyledKind, string>;
@@ -95,19 +95,26 @@ function approach(corner: { x: number; y: number }, toward: { x: number; y: numb
 function renderNode(node: LaidOutNode, theme: Theme): string {
   if (node.kind === "boundary") return renderBoundary(node, theme);
 
-  const style = theme.kinds[node.kind];
-  const glyph = GLYPH[node.kind];
+  // An external (package) call is any function node carrying `source`. It is a
+  // boundary you can SEE but not descend through — so it is drawn dashed, in the
+  // off-palette `external` swatch, with the package named on a sub-line. This is
+  // the audit signal: every crossing into third-party code is visibly marked.
+  const isExternal = node.source !== undefined;
   const isLink = node.kind === "module" && node.ref;
+  const style = isExternal ? theme.external : theme.kinds[node.kind];
+  const glyph = isExternal ? EXTERNAL_GLYPH : GLYPH[node.kind];
   const cx = node.x + node.w / 2;
 
   const parts: string[] = [];
-  const linkAttr = isLink ? ` data-link="${attr(node.ref!)}" role="link" tabindex="0" class="node node-link"` : ` class="node"`;
-  parts.push(`<g${linkAttr}>`);
+  const cls = isExternal ? ` class="node node-external"` : isLink ? ` class="node node-link"` : ` class="node"`;
+  const linkAttr = isLink ? ` data-link="${attr(node.ref!)}" role="link" tabindex="0"` : "";
+  const srcAttr = isExternal ? ` data-source="${attr(node.source!)}"` : "";
+  parts.push(`<g${cls}${linkAttr}${srcAttr}>`);
 
   // body
   parts.push(
     `<rect x="${r(node.x)}" y="${r(node.y)}" width="${r(node.w)}" height="${r(node.h)}" rx="9" ` +
-      `fill="${style.fill}" stroke="${style.stroke}" stroke-width="1.5"${isLink ? ` stroke-dasharray="1 0"` : ""}/>`,
+      `fill="${style.fill}" stroke="${style.stroke}" stroke-width="1.5"${isExternal ? ` stroke-dasharray="4 3"` : ""}/>`,
   );
   if (isLink) {
     // a second inset border to read as "opens another canvas"
@@ -122,12 +129,19 @@ function renderNode(node: LaidOutNode, theme: Theme): string {
     `<text x="${r(node.x + 8)}" y="${r(node.y + 15)}" font-size="11" fill="${style.stroke}" opacity="0.85">${esc(glyph)}</text>`,
   );
 
-  // label (centred)
+  // label — centred, nudged up when a package sub-line shares the box
   const labelFill = theme.text;
   const mono = node.kind === "const" ? ` font-family="ui-monospace,SFMono-Regular,Menlo,monospace"` : "";
+  const labelY = isExternal ? node.y + node.h / 2 - 2 : node.y + node.h / 2 + 4;
   parts.push(
-    `<text x="${r(cx)}" y="${r(node.y + node.h / 2 + 4)}" font-size="12" text-anchor="middle" fill="${labelFill}"${halo(style.fill)}${mono}>${esc(node.label)}</text>`,
+    `<text x="${r(cx)}" y="${r(labelY)}" font-size="12" text-anchor="middle" fill="${labelFill}"${halo(style.fill)}${mono}>${esc(node.label)}</text>`,
   );
+  if (isExternal) {
+    // the package name, small and in the swatch hue — "this comes from here"
+    parts.push(
+      `<text x="${r(cx)}" y="${r(node.y + node.h / 2 + 12)}" font-size="9" text-anchor="middle" fill="${style.stroke}"${halo(style.fill)}>${esc(node.source!)}</text>`,
+    );
+  }
   if (isLink) {
     parts.push(
       `<text x="${r(node.x + node.w - 8)}" y="${r(node.y + 15)}" font-size="11" text-anchor="end" fill="${style.stroke}">↗</text>`,

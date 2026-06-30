@@ -10,8 +10,8 @@
  *
  * No framework, no build step: vanilla JS, opens straight in a browser.
  */
-import type { System } from "../ir/schema.js";
-import { defaultTheme, KINDS, type Theme } from "./theme.js";
+import type { Import, System } from "../ir/schema.js";
+import { defaultTheme, EXTERNAL_GLYPH, KINDS, type Theme } from "./theme.js";
 
 export interface Canvas {
   moduleId: string;
@@ -46,6 +46,24 @@ export function renderHtml(system: System, canvases: Canvas[], theme: Theme = de
     );
   }).join("");
 
+  // The external-call swatch is appended to the node legend: it is not a node
+  // kind (any function may be external), so it sits apart, drawn dashed.
+  const ext = theme.external;
+  const externalLegend =
+    `<div class="legend-row"><span class="kind-chip dashed" style="background:${attr(ext.fill)};border-color:${attr(ext.stroke)};color:${attr(ext.stroke)}">${esc(EXTERNAL_GLYPH)}</span>external — package call</div>`;
+
+  // Dependencies surface: the system's imports listed verbatim. This is the
+  // supply-chain view — every package the agent pulled in, at a glance.
+  const imports = system.imports ?? [];
+  const depList = imports.length
+    ? imports
+        .map(
+          (imp) =>
+            `<div class="dep"><span class="dep-src">${esc(imp.source)}</span><span class="dep-bind">${esc(bindingSummary(imp))}</span></div>`,
+        )
+        .join("")
+    : '<div class="empty">none</div>';
+
   const bootData = JSON.stringify({ titles, features });
 
   return `<!doctype html>
@@ -62,12 +80,15 @@ export function renderHtml(system: System, canvases: Canvas[], theme: Theme = de
   <div class="brand-sub">audit map</div>
   <div class="section-label">Features</div>
   <nav class="features">${featureList || '<div class="empty">no features</div>'}</nav>
+  <div class="section-label">Dependencies</div>
+  <div class="deps">${depList}</div>
   <div class="legend">
     <div class="section-label">Wires</div>
     <div class="legend-row"><span class="swatch control"></span>control — execution order</div>
     <div class="legend-row"><span class="swatch data"></span>data — values</div>
     <div class="section-label">Nodes</div>
     ${kindLegend}
+    ${externalLegend}
   </div>
 </aside>
 <main class="main">
@@ -83,6 +104,18 @@ export function renderHtml(system: System, canvases: Canvas[], theme: Theme = de
 function systemTitle(system: System, titles: Record<string, string>): string {
   const first = system.features.find((f) => f in system.modules);
   return first ? (titles[first] ?? first) : "system";
+}
+
+/** One-line summary of what an import binds (for the Dependencies list). */
+function bindingSummary(imp: Import): string {
+  if (imp.bindings.length === 0) return "(side-effect)";
+  return imp.bindings
+    .map((b) => {
+      if (b.kind === "namespace") return `∗ ${b.local}`;
+      if (b.kind === "default") return `${b.local} (default)`;
+      return b.imported === b.local ? b.local : `${b.imported}→${b.local}`;
+    })
+    .join(", ");
 }
 
 /** Build the viewer stylesheet from a theme. */
@@ -107,6 +140,11 @@ body{display:flex;background:var(--bg);color:var(--text);font:14px/1.4 ui-sans-s
 .swatch.control{border-color:var(--control)}
 .swatch.data{border-color:var(--data)}
 .kind-chip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:15px;border:1px solid;border-radius:4px;font-size:10px;line-height:1;flex:0 0 auto}
+.kind-chip.dashed{border-style:dashed}
+.deps{display:flex;flex-direction:column;gap:5px}
+.dep{display:flex;flex-direction:column;gap:1px;padding:5px 9px;border:1px dashed var(--line);border-radius:7px}
+.dep-src{font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
+.dep-bind{font-size:11px;color:var(--muted)}
 .main{flex:1;display:flex;flex-direction:column;min-width:0}
 .breadcrumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:14px 20px;border-bottom:1px solid var(--line);min-height:50px}
 .crumb{background:transparent;border:none;color:var(--text);cursor:pointer;font:inherit;padding:4px 8px;border-radius:6px}

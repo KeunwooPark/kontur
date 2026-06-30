@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { validateSystem } from "../ir/index.js";
 import type { System } from "../ir/schema.js";
-import { layoutModule, layoutSystem, render } from "./index.js";
+import { liftTypeScript } from "../lift/index.js";
+import { layoutModule, layoutSystem, render, renderCanvasSvg } from "./index.js";
 import { derivePins } from "./ports.js";
 
 function load(name: string): System {
@@ -82,6 +83,57 @@ describe("layout", () => {
     const login = await layoutModule("login", sys);
     const link = login.nodes.find((n) => n.kind === "module");
     expect(link?.ref).toBe("userLookup");
+  });
+});
+
+describe("external (package) calls are rendered as boundary crossings", () => {
+  const SRC = [
+    'import { chunk } from "lodash";',
+    'import * as path from "path";',
+    "",
+    "export function group(items: number[]): void {",
+    "  const groups = chunk(items, 2);",
+    '  const p = path.join("a", "b");',
+    "  console.log(groups);",
+    "  console.log(p);",
+    "}",
+    "",
+  ].join("\n");
+
+  function lift(): System {
+    const res = validateSystem(liftTypeScript(SRC));
+    if (!res.ok) throw new Error("lifted IR invalid");
+    return res.system;
+  }
+
+  it("carries each call's package through layout onto the node", async () => {
+    const sys = lift();
+    const canvas = await layoutModule("group", sys);
+    const externals = canvas.nodes.filter((n) => n.source !== undefined);
+    expect(externals.map((n) => n.source).sort()).toEqual(["lodash", "path"]);
+    // the dotted member call keeps its full label
+    expect(externals.some((n) => n.label === "path.join" && n.source === "path")).toBe(true);
+  });
+
+  it("marks the node in SVG (dashed body, package name, data-source hook)", async () => {
+    const sys = lift();
+    const svg = renderCanvasSvg(await layoutModule("group", sys));
+    expect(svg).toContain('data-source="lodash"');
+    expect(svg).toContain('class="node node-external"');
+    expect(svg).toContain("stroke-dasharray=\"4 3\""); // the boundary-crossing dashes
+    // the package is named on the node body, not just in a tooltip
+    expect(svg).toContain(">lodash<");
+    expect(svg).toContain(">path<");
+  });
+
+  it("lists the imports in the Dependencies sidebar of the HTML bundle", async () => {
+    const html = await render(lift());
+    expect(html).toContain("Dependencies");
+    expect(html).toContain("lodash");
+    expect(html).toContain("chunk"); // the named binding summary
+    expect(html).toContain("∗ path"); // the namespace binding summary
+    expect(html).toContain("external — package call"); // legend entry
+    expect(html).not.toContain("NaN");
   });
 });
 

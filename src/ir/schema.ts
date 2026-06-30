@@ -74,7 +74,14 @@ const nodeBase = { id: z.string().min(1), prov: SourceSpan.optional() };
  * (a link). Every node has a unique-within-its-module `id` that wires reference.
  */
 export const Node = z.discriminatedUnion("kind", [
-  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional() }).strict(),
+  // A pure transform / call. `op` is the abstract operator (built-in). `source`,
+  // when present, marks an EXTERNAL call into an imported package — the label is
+  // the library API name (e.g. "chunk", "path.join") and `source` is the package
+  // specifier it was imported from (e.g. "lodash", "path"). This is the audit
+  // marker for a trust-boundary crossing; the import itself is recorded on
+  // `System.imports`. `op` and `source` are mutually exclusive (a built-in op is
+  // never external). Absent both ⇒ a local helper/stub call.
+  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string() }).strict(),
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
@@ -169,6 +176,31 @@ export const Module = z
   .strict();
 
 /**
+ * One binding introduced by an import (see `Import`). `local` is the in-body
+ * name; `imported` (named only) is the package-side name so aliases round-trip.
+ */
+export const ImportBinding = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("named"), imported: z.string().min(1), local: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("default"), local: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("namespace"), local: z.string().min(1) }).strict(),
+]);
+
+/**
+ * A package import. The IR records imports VERBATIM (source specifier + bindings)
+ * so the transpiler can reproduce the original `import` line — without this the
+ * `code → lift → transpile` round-trip drops every import. `bindings` is empty
+ * for a bare side-effect import (`import "x"`). The audit view of a *used* import
+ * is a `function` node carrying `source`; this list is the fidelity record.
+ */
+export const Import = z
+  .object({
+    source: z.string().min(1),
+    bindings: z.array(ImportBinding),
+    prov: SourceSpan.optional(),
+  })
+  .strict();
+
+/**
  * The whole system. `features` are entry-point canvases — just the module ids
  * you start navigating from (a feature is not its own kind of thing).
  */
@@ -176,6 +208,8 @@ export const System = z
   .object({
     features: z.array(z.string().min(1)),
     modules: z.record(z.string().min(1), Module),
+    /** Package imports in source order. Optional: a graph need carry none. */
+    imports: z.array(Import).optional(),
   })
   .strict();
 
@@ -185,6 +219,8 @@ export type PortIO = z.infer<typeof PortIO>;
 export type WireKind = z.infer<typeof WireKind>;
 export type Op = z.infer<typeof Op>;
 export type Port = z.infer<typeof Port>;
+export type ImportBinding = z.infer<typeof ImportBinding>;
+export type Import = z.infer<typeof Import>;
 export type Node = z.infer<typeof Node>;
 export type Wire = z.infer<typeof Wire>;
 export type Interior = z.infer<typeof Interior>;

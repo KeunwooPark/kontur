@@ -14,7 +14,7 @@
  *     inlined again on the way back out — never spuriously bound to a variable.
  */
 import type { Class, Expr, Fn, Program, Stmt } from "../transpile/ast.js";
-import type { Module, Node, Port, SourceSpan, System, Wire } from "../ir/schema.js";
+import type { Import, Module, Node, Port, SourceSpan, System, Wire } from "../ir/schema.js";
 
 interface Ctx {
   nodes: Node[];
@@ -24,6 +24,8 @@ interface Ctx {
   used: Set<string>;
   knownFns: Set<string>;
   fnParams: Map<string, string[]>;
+  /** imported local name → the package it came from (for tagging external calls). */
+  importSource: Map<string, string>;
   counter: { n: number };
   returnSource: string | undefined;
 }
@@ -31,13 +33,33 @@ interface Ctx {
 export function liftProgram(program: Program): System {
   const knownFns = new Set(program.functions.map((f) => f.name));
   const fnParams = new Map(program.functions.map((f) => [f.name, f.params.map((p) => p.name)]));
+  // Map every imported local name to its package, so a call through that name can
+  // be tagged with where it crosses into third-party code.
+  const importSource = new Map<string, string>();
+  for (const imp of program.imports ?? []) {
+    for (const b of imp.bindings) importSource.set(b.local, imp.source);
+  }
   const modules: Record<string, Module> = {};
-  for (const fn of program.functions) modules[fn.name] = lowerFn(fn, knownFns, fnParams);
-  for (const cls of program.classes) lowerClass(cls, modules, knownFns, fnParams);
+  for (const fn of program.functions) modules[fn.name] = lowerFn(fn, knownFns, fnParams, importSource);
+  for (const cls of program.classes) lowerClass(cls, modules, knownFns, fnParams, importSource);
   // Entry-point canvases: the top-level declarations (free functions + classes),
   // never the methods — those are reached by descending into the class.
   const features = [...program.functions.map((f) => f.name), ...program.classes.map((c) => c.name)];
-  return { features, modules };
+  const system: System = { features, modules };
+  // Record imports verbatim so the transpiler can reproduce them (round-trip
+  // fidelity). Mapped span → prov to match the IR's provenance field name.
+  if (program.imports && program.imports.length > 0) {
+    system.imports = program.imports.map(
+      (imp): Import => ({ source: imp.source, bindings: imp.bindings, ...(imp.span ? { prov: imp.span } : {}) }),
+    );
+  }
+  return system;
+}
+
+/** The package a call name crosses into, or undefined for a local/builtin call.
+ *  The base identifier (`name` before any `.`) is what an import binds. */
+function externalSource(ctx: Ctx, name: string): string | undefined {
+  return ctx.importSource.get(name.split(".")[0]!);
 }
 
 /**
@@ -51,6 +73,7 @@ function lowerClass(
   modules: Record<string, Module>,
   knownFns: Set<string>,
   fnParams: Map<string, string[]>,
+  importSource: Map<string, string>,
 ): void {
   const nodes: Node[] = [];
   for (const field of cls.fields) {
@@ -58,7 +81,7 @@ function lowerClass(
   }
   for (const m of cls.methods) {
     const methodId = `${cls.name}.${m.name}`;
-    modules[methodId] = lowerFn(m, knownFns, fnParams);
+    modules[methodId] = lowerFn(m, knownFns, fnParams, importSource);
     nodes.push({ id: methodId, kind: "module", ref: methodId });
   }
   modules[cls.name] = {
@@ -70,13 +93,13 @@ function lowerClass(
   };
 }
 
-function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>): Module {
+function lowerFn(fn: Fn, knownFns: Set<string>, fnParams: Map<string, string[]>, importSource: Map<string, string>): Module {
   fn = normalizeReturns(fn);
   fn = { ...fn, body: foldGuards(fn.body) };
   assertSupported(fn);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
-    knownFns, fnParams, counter: { n: 0 }, returnSource: undefined,
+    knownFns, fnParams, importSource, counter: { n: 0 }, returnSource: undefined,
   };
 
   const ports: Port[] = [{ name: "exec", type: "exec", io: "in", wire: "control" }];
@@ -235,7 +258,11 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     });
     return id;
   }
-  const id = newNode(ctx, { kind: "function", label: e.name }, idHint, prov);
+  // Not a sibling module: a local helper/stub, or — if its base name was imported
+  // — a call into a package. The latter is tagged with `source` so the diagram
+  // shows the trust-boundary crossing.
+  const source = externalSource(ctx, e.name);
+  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}) }, idHint, prov);
   for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
   return id;
 }
@@ -291,8 +318,10 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       return id;
     }
     case "call": {
-      // A nested call in value position → a pure (un-sequenced) stub function.
-      const id = newNode(ctx, { kind: "function", label: e.name });
+      // A nested call in value position → a pure (un-sequenced) stub function,
+      // tagged with `source` when it calls into an imported package.
+      const source = externalSource(ctx, e.name);
+      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}) });
       for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
       return id;
     }

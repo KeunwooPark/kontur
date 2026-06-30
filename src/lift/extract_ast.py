@@ -11,6 +11,22 @@ TYPE_MAP = {"int": "int", "float": "float", "str": "string", "bool": "bool"}
 BINOP = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div", ast.Mod: "mod"}
 CMP = {ast.Eq: "eq", ast.NotEq: "ne", ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge"}
 
+# Local names bound by imports (filled before walking the body). A `base.attr(...)`
+# call is only accepted when `base` is one of these — so a package member call
+# (`math.sqrt(x)`) lifts, while a self/local member call stays a loud reject.
+IMPORTED_NAMES = set()
+
+
+def call_name(func):
+    """The dotted callee name of a Call, or None if it is not a supported shape.
+    A plain `name(...)` is always allowed; `base.attr(...)` only when `base` is an
+    imported name (otherwise it is a self/local member access we do not model)."""
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in IMPORTED_NAMES:
+        return func.value.id + "." + func.attr
+    return None
+
 
 def map_type(node):
     if isinstance(node, ast.Name):
@@ -73,8 +89,8 @@ def expr(e):
             "to": range_stop_to(stop),
             "elem": expr(e.elt),
         }
-    if isinstance(e, ast.Call) and isinstance(e.func, ast.Name):
-        return {"t": "call", "name": e.func.id, "args": [expr(a) for a in e.args]}
+    if isinstance(e, ast.Call) and call_name(e.func) is not None:
+        return {"t": "call", "name": call_name(e.func), "args": [expr(a) for a in e.args]}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
 
 
@@ -142,8 +158,8 @@ def _stmt(s):
             "iter": expr(s.iter),
             "body": [stmt(x) for x in s.body],
         }
-    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and isinstance(s.value.func, ast.Name):
-        if s.value.func.id == "print":
+    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and call_name(s.value.func) is not None:
+        if isinstance(s.value.func, ast.Name) and s.value.func.id == "print":
             return {"t": "print", "arg": expr(s.value.args[0])}
         return {"t": "expr", "expr": expr(s.value)}
     if isinstance(s, ast.Raise):
@@ -235,7 +251,37 @@ def klass(c):
     return out
 
 
+def imports_of(tree):
+    """Collect import statements verbatim so the transpiler can reproduce them.
+    `import a, b` and `from m import a, b` each yield one Import per module
+    specifier. Relative and star imports have no faithful model — refuse loudly."""
+    out = []
+    for n in tree.body:
+        sp = span(n)
+        if isinstance(n, ast.Import):
+            # `import a as x, b` → one namespace binding per module name.
+            for alias in n.names:
+                b = {"kind": "namespace", "local": alias.asname or alias.name}
+                d = {"source": alias.name, "bindings": [b]}
+                if sp is not None:
+                    d["span"] = sp
+                out.append(d)
+        elif isinstance(n, ast.ImportFrom):
+            if n.level != 0:
+                raise SystemExit("lift(py): unsupported relative import (no IR model for package-relative specifiers)")
+            if any(a.name == "*" for a in n.names):
+                raise SystemExit("lift(py): unsupported star import (`from m import *` binds names we cannot see)")
+            bindings = [{"kind": "named", "imported": a.name, "local": a.asname or a.name} for a in n.names]
+            d = {"source": n.module, "bindings": bindings}
+            if sp is not None:
+                d["span"] = sp
+            out.append(d)
+    return out
+
+
 tree = ast.parse(sys.stdin.read())
+imports = imports_of(tree)
+IMPORTED_NAMES = {b["local"] for imp in imports for b in imp["bindings"]}
 functions = [func(n) for n in tree.body if isinstance(n, ast.FunctionDef)]
 classes = [klass(n) for n in tree.body if isinstance(n, ast.ClassDef)]
-print(json.dumps({"functions": functions, "classes": classes}))
+print(json.dumps({"functions": functions, "classes": classes, "imports": imports}))

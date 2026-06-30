@@ -72,7 +72,22 @@ export interface Theme {
 
   // --- node bodies, per kind ----------------------------------------------
   kinds: Record<StyledKind, { fill: string; stroke: string }>;
+
+  /**
+   * A call that crosses out of the authored code into an imported package
+   * (a `function` node carrying `source`). It is NOT a node kind — any function
+   * node can be external — so it gets its own swatch rather than a `kinds` entry.
+   * Drawn dashed (a boundary you cannot descend through) in a deliberately
+   * off-palette neutral, so a third-party dependency reads as "not your code".
+   */
+  external: { fill: string; stroke: string };
 }
+
+/**
+ * The marker glyph for an external (package) call, shared by the node body and
+ * the legend. Distinct from the `ƒ` of a local call — reads as "brought in".
+ */
+export const EXTERNAL_GLYPH = "⤓";
 
 /**
  * Default: white background with the Okabe–Ito qualitative palette — the
@@ -115,6 +130,7 @@ export const paper: Theme = {
     stateGet: { fill: "#eceefc", stroke: "#5a67d8" },
     stateSet: { fill: "#eceefc", stroke: "#5a67d8" },
   },
+  external: { fill: "#f0ece6", stroke: "#8a6d4f" }, // taupe — off-palette "not your code"
 };
 
 /** The original dark console palette. */
@@ -150,6 +166,7 @@ export const ink: Theme = {
     stateGet: { fill: "#191b30", stroke: "#7c83e8" },
     stateSet: { fill: "#191b30", stroke: "#7c83e8" },
   },
+  external: { fill: "#241f17", stroke: "#b08d63" }, // muted amber-brown — "not your code"
 };
 
 /** All built-in themes, keyed by name. */

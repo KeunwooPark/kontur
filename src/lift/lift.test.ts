@@ -67,6 +67,135 @@ describe("lift: imports hand-written code", () => {
   });
 });
 
+describe("lift: package imports (capture + external call tagging)", () => {
+  it("captures a named import, tags the call with its package, and round-trips (TS)", () => {
+    const src = [
+      'import { chunk } from "lodash";',
+      "",
+      "export function group(items: number[]): void {",
+      "  const groups = chunk(items, 2);",
+      "  console.log(groups);",
+      "}",
+      "",
+    ].join("\n");
+
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+
+    // Step 1: the import is recorded verbatim (was silently dropped before).
+    expect(sys.imports).toEqual([
+      { source: "lodash", bindings: [{ kind: "named", imported: "chunk", local: "chunk" }] },
+    ]);
+    // Step 2: the call into the package is a `function` node tagged with `source`.
+    const ext = sys.modules["group"]!.interior.nodes.find(
+      (n): n is Extract<typeof n, { kind: "function" }> => n.kind === "function" && "source" in n && n.source !== undefined,
+    );
+    expect(ext?.label).toBe("chunk");
+    expect((ext as { source?: string }).source).toBe("lodash");
+
+    const codeA = transpile(sys, "ts");
+    // The import line comes back, and the API name is emitted VERBATIM (not re-cased).
+    expect(codeA).toContain('import { chunk } from "lodash";');
+    expect(codeA).toContain("const groups = chunk(items, 2);");
+    // Round-trip is a fixed point.
+    const codeB = transpile(liftTypeScript(codeA), "ts");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("captures a namespace import and preserves a dotted member call verbatim (TS)", () => {
+    const src = [
+      'import * as path from "path";',
+      "",
+      "export function where(): void {",
+      '  const p = path.join("a", "b");',
+      "  console.log(p);",
+      "}",
+      "",
+    ].join("\n");
+
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.imports).toEqual([
+      { source: "path", bindings: [{ kind: "namespace", local: "path" }] },
+    ]);
+
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toContain('import * as path from "path";');
+    // `path.join` survives intact — camel-casing would have mangled it to `pathJoin`.
+    expect(codeA).toContain('const p = path.join("a", "b");');
+    const codeB = transpile(liftTypeScript(codeA), "ts");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("preserves an aliased named import across the round-trip (TS)", () => {
+    const src = [
+      'import { readFile as read } from "fs";',
+      "",
+      "export function load(name: string): void {",
+      "  const data = read(name);",
+      "  console.log(data);",
+      "}",
+      "",
+    ].join("\n");
+    const codeA = transpile(liftTypeScript(src), "ts");
+    expect(codeA).toContain('import { readFile as read } from "fs";');
+    expect(codeA).toContain("const data = read(name);");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA);
+  });
+
+  it("refuses a type-only import (no runtime meaning, no IR model)", () => {
+    const src = 'import type { User } from "./models";\nexport function f(): void {}\n';
+    expect(() => liftTypeScript(src)).toThrow(/type-only import/);
+  });
+
+  it("refuses `import = require()` (only ES module imports are modelled)", () => {
+    const src = 'import fs = require("fs");\nexport function f(): void {}\n';
+    expect(() => liftTypeScript(src)).toThrow(/import = require/);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: package imports (Python)", () => {
+  it("captures `from … import` + `import …`, tags calls, and round-trips", () => {
+    const src = [
+      "from math import sqrt",
+      "import os",
+      "",
+      "",
+      "def f(n: int) -> None:",
+      "    x = sqrt(n)",
+      "    y = os.getcwd()",
+      "    print(x)",
+      "    print(y)",
+      "",
+    ].join("\n");
+
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    // Imports captured (provenance is stamped by the Python extractor).
+    expect(sys.imports?.map((i) => ({ source: i.source, bindings: i.bindings }))).toEqual([
+      { source: "math", bindings: [{ kind: "named", imported: "sqrt", local: "sqrt" }] },
+      { source: "os", bindings: [{ kind: "namespace", local: "os" }] },
+    ]);
+    // `sqrt` and the namespace member call `os.getcwd` are tagged external.
+    const tagged = sys.modules["f"]!.interior.nodes
+      .filter((n) => n.kind === "function" && "source" in n && n.source !== undefined)
+      .map((n) => (n as { label: string; source?: string }).source);
+    expect(tagged.sort()).toEqual(["math", "os"]);
+
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("from math import sqrt");
+    expect(codeA).toContain("import os");
+    expect(codeA).toContain("y = os.getcwd()"); // member call kept verbatim (not snake-cased)
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("refuses a star import (binds names we cannot see)", () => {
+    const src = "from os import *\n\n\ndef f() -> None:\n    pass\n";
+    expect(() => liftPython(src)).toThrow();
+  });
+});
+
 describe("lift: classes (modules-as-methods + state-as-attributes)", () => {
   const SRC = [
     "export class Counter {",

@@ -23,8 +23,13 @@ export type Expr =
   | { t: "array"; elems: Expr[] }
   /** A list comprehension over an inclusive range: `[elem for v in from..to]`. */
   | { t: "comprehension"; varName: string; from: Expr; to: Expr; elem: Expr }
-  /** A call to a generated function: a helper (stub) or another module. */
-  | { t: "call"; name: string; args: Expr[] };
+  /**
+   * A call to a generated function: a helper (stub) or another module. When
+   * `external` is set the callee is an imported package symbol — its name is a
+   * library API identifier, so it is emitted VERBATIM (no camel/snake re-casing,
+   * dotted member access preserved).
+   */
+  | { t: "call"; name: string; args: Expr[]; external?: boolean };
 
 // `span` is the optional provenance back to source (set by the lifters, ignored
 // by the emitters). Intersected over the union so every statement kind carries it
@@ -105,7 +110,32 @@ export interface Class {
   span?: SourceSpan;
 }
 
+/**
+ * One binding introduced by an import statement. `local` is the name visible in
+ * the body; `imported` (named only) is the name on the package side, so an alias
+ * (`import { a as b }`) round-trips. A `default` import has no package-side name;
+ * a `namespace` import (`* as ns` / `import mod`) binds the whole module object.
+ */
+export type ImportBinding =
+  | { kind: "named"; imported: string; local: string }
+  | { kind: "default"; local: string }
+  | { kind: "namespace"; local: string };
+
+/**
+ * A single import statement. `source` is the module specifier (e.g. "lodash",
+ * "./util", "os"). An empty `bindings` is a bare side-effect import (`import "x"`).
+ * Captured verbatim so the transpiler can reproduce it — fidelity, not analysis.
+ */
+export interface Import {
+  source: string;
+  bindings: ImportBinding[];
+  /** Provenance back to the import statement (lifters that track spans). */
+  span?: SourceSpan;
+}
+
 export interface Program {
   functions: Fn[];
   classes: Class[];
+  /** Imports in source order. Optional for back-compat with older callers. */
+  imports?: Import[];
 }
