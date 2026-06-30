@@ -177,6 +177,13 @@ export const Module = z
     kind: z.enum(["function", "class"]).optional(),
     ports: z.array(Port),
     interior: Interior,
+    /**
+     * The module's docstring — the human text of a function/method/class doc
+     * comment (Python docstring / TS JSDoc), captured verbatim so the
+     * code → lift → transpile round-trip preserves it. Documentation, not flow:
+     * it has no node and no wire. Absent ⇒ the source carried no doc.
+     */
+    doc: z.string().optional(),
     /** Provenance for the module as a whole (e.g. a function/method/class def). */
     prov: SourceSpan.optional(),
     /**

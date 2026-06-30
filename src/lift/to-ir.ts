@@ -164,6 +164,7 @@ function lowerClass(
     kind: "class",
     ports: [],
     interior: { nodes, wires: [] },
+    ...(cls.doc !== undefined ? { doc: cls.doc } : {}),
     ...(cls.span ? { prov: cls.span } : {}),
     ...(origin ? { origin } : {}),
   };
@@ -201,6 +202,7 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
     title: fn.name,
     ports,
     interior: { nodes: ctx.nodes, wires: ctx.wires },
+    ...(fn.doc !== undefined ? { doc: fn.doc } : {}),
     ...(fn.span ? { prov: fn.span } : {}),
     ...(origin ? { origin } : {}),
   };

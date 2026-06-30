@@ -262,6 +262,123 @@ describe.skipIf(!hasPython())("lift: classes (Python)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python docstrings (capture + round-trip)", () => {
+  it("captures a function docstring as the module's doc and round-trips", () => {
+    // Before docstrings were captured, the leading string statement was an
+    // `unsupported stmt` — it blocked nearly every real function. Now it round-trips.
+    const src = [
+      "def greet(name: str) -> None:",
+      '    """Print a greeting."""',
+      "    print(name)",
+      "",
+    ].join("\n");
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["greet"]!.doc).toBe("Print a greeting.");
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain('"""Print a greeting."""');
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("captures class + method docstrings and round-trips", () => {
+    const src = [
+      "class Widget:",
+      '    """A widget."""',
+      "",
+      "    def render(self) -> None:",
+      '        """Draw it."""',
+      "        print(1)",
+      "",
+    ].join("\n");
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["Widget"]!.doc).toBe("A widget.");
+    expect(sys.modules["Widget.render"]!.doc).toBe("Draw it.");
+    const codeA = transpile(sys, "python");
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("tolerates a docstring-only body (no `pass` filler needed) and round-trips", () => {
+    const src = 'def stub() -> None:\n    """Not implemented yet."""\n';
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain('"""Not implemented yet."""');
+    expect(codeA).not.toContain("pass"); // the docstring IS the body
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA);
+  });
+
+  it("round-trips a multi-line docstring (escaped to a reparse-stable literal)", () => {
+    const src = [
+      "def f(x: int) -> None:",
+      '    """First line.',
+      "",
+      "    More detail.",
+      '    """',
+      "    print(x)",
+      "",
+    ].join("\n");
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["f"]!.doc).toContain("First line.");
+    expect(transpile(liftPython(transpile(sys, "python")), "python")).toBe(transpile(sys, "python"));
+  });
+
+  it("cross-compiles a Python docstring to a TS JSDoc block", () => {
+    const sys = liftPython('def greet(name: str) -> None:\n    """Hello."""\n    print(name)\n');
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("/**");
+    expect(ts).toContain("* Hello.");
+  });
+});
+
+describe("lift: TS JSDoc (capture + round-trip)", () => {
+  it("captures a JSDoc block as the module's doc and round-trips", () => {
+    const src = [
+      "/**",
+      " * Print a greeting.",
+      " */",
+      "export function greet(name: string): void {",
+      "  console.log(name);",
+      "}",
+      "",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["greet"]!.doc).toBe("Print a greeting.");
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toContain(" * Print a greeting.");
+    const codeB = transpile(liftTypeScript(codeA), "ts");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("round-trips a class + method JSDoc", () => {
+    const src = [
+      "/**",
+      " * A widget.",
+      " */",
+      "export class Widget {",
+      "  /**",
+      "   * Draw it.",
+      "   */",
+      "  render(): void {",
+      "    console.log(1);",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["Widget"]!.doc).toBe("A widget.");
+    expect(sys.modules["Widget.render"]!.doc).toBe("Draw it.");
+    const codeA = transpile(sys, "ts");
+    const codeB = transpile(liftTypeScript(codeA), "ts");
+    expect(codeB).toBe(codeA);
+  });
+});
+
 describe("lift: template strings lower to the concat op", () => {
   const SRC = [
     "export function label(x: number): string {",

@@ -206,6 +206,21 @@ def _stmt(s):
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 
+def docstring_of(body):
+    """The PEP 257 docstring of a body: a leading bare string-literal statement.
+    Returns (doc, rest) with that statement removed, or (None, body) if absent.
+    Captured (not executed code) so it round-trips instead of blocking the parse —
+    a function/class docstring is the first statement of nearly every real file."""
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return body[0].value.value, body[1:]
+    return None, body
+
+
 def is_void(rt):
     if rt is None:
         return True
@@ -223,7 +238,10 @@ def func(f, is_method=False):
         args = args[1:]
     params = [{"name": a.arg, "type": map_type(a.annotation)} for a in args]
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
-    out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in f.body]}
+    doc, body = docstring_of(f.body)
+    out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in body]}
+    if doc is not None:
+        out["doc"] = doc
     if is_method:
         out["isMethod"] = True
     sp = span(f)
@@ -235,7 +253,8 @@ def func(f, is_method=False):
 def klass(c):
     fields = []
     methods = []
-    for n in c.body:
+    doc, body = docstring_of(c.body)
+    for n in body:
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
             fields.append({"name": n.target.id, "type": map_type(n.annotation)})
         elif isinstance(n, ast.FunctionDef):
@@ -245,6 +264,8 @@ def klass(c):
         else:
             raise SystemExit("lift(py): unsupported class member: " + ast.dump(n))
     out = {"name": c.name, "fields": fields, "methods": methods}
+    if doc is not None:
+        out["doc"] = doc
     sp = span(c)
     if sp is not None:
         out["span"] = sp
