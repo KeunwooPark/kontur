@@ -59,6 +59,17 @@ function expr(e: Expr): string {
     case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.cond)} ? ${expr(e.then)} : ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
+    case "collection": {
+      // One-way cross-compile (these forms re-lift from Python, not TS): a tuple
+      // becomes a plain array (TS has no distinct runtime tuple), a set a `new
+      // Set([…])`, a dict a `new Map([[k, v], …])` (faithful for arbitrary keys).
+      if (e.form === "dict") {
+        const entries = e.entries ?? [];
+        return `new Map([${entries.map((en) => `[${expr(en.key)}, ${expr(en.value)}]`).join(", ")}])`;
+      }
+      const items = (e.elems ?? []).map(expr).join(", ");
+      return e.form === "set" ? `new Set([${items}])` : `[${items}]`;
+    }
     case "comprehension": {
       // TS has no comprehension syntax; emit a range-map. The bound variable runs
       // 0-based, matching the example-level `from === 0` comprehensions we lift.

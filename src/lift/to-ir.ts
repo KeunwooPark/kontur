@@ -457,6 +457,20 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       e.elems.forEach((el, i) => ctx.wires.push([lowerExpr(ctx, el), `${id}:${i}`, "data"]));
       return id;
     }
+    case "collection": {
+      // Tuple/set: positional element pins "0".."n-1". Dict: paired entry pins
+      // "key0","val0",… in source order. Either may be empty (an empty literal).
+      const id = newNode(ctx, { kind: "collection", label: e.form, form: e.form });
+      if (e.form === "dict") {
+        (e.entries ?? []).forEach((ent, i) => {
+          ctx.wires.push([lowerExpr(ctx, ent.key), `${id}:key${i}`, "data"]);
+          ctx.wires.push([lowerExpr(ctx, ent.value), `${id}:val${i}`, "data"]);
+        });
+      } else {
+        (e.elems ?? []).forEach((el, i) => ctx.wires.push([lowerExpr(ctx, el), `${id}:${i}`, "data"]));
+      }
+      return id;
+    }
     case "comprehension": {
       const id = newNode(ctx, { kind: "comprehension", label: e.varName });
       ctx.wires.push([lowerExpr(ctx, e.from), `${id}:from`, "data"]);
@@ -758,6 +772,10 @@ function exprReads(e: Expr, out: Set<string>): void {
     case "un": exprReads(e.x, out); break;
     case "cond": exprReads(e.cond, out); exprReads(e.then, out); exprReads(e.else, out); break;
     case "array": e.elems.forEach((el) => exprReads(el, out)); break;
+    case "collection":
+      if (e.form === "dict") (e.entries ?? []).forEach((ent) => { exprReads(ent.key, out); exprReads(ent.value, out); });
+      else (e.elems ?? []).forEach((el) => exprReads(el, out));
+      break;
     case "comprehension": exprReads(e.from, out); exprReads(e.to, out); exprReads(e.elem, out); break;
     case "itercomp":
       exprReads(e.iter, out);

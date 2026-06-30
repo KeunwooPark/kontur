@@ -1002,6 +1002,63 @@ describe.skipIf(!hasPython())("lift: Python iterable comprehensions (item 11)", 
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python collection literals (item 12, slice B)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a tuple literal and round-trips", () => {
+    const { py } = rt("def f(a: int, b: int) -> None:\n    print((a, b))\n");
+    expect(py).toContain("print((a, b))");
+  });
+
+  it("keeps a single-element tuple's trailing comma", () => {
+    const { py } = rt("def f(a: int) -> None:\n    print((a,))\n");
+    expect(py).toContain("print((a,))");
+  });
+
+  it("lifts a set literal and round-trips", () => {
+    const { py } = rt("def f(a: int, b: int) -> None:\n    print({a, b})\n");
+    expect(py).toContain("print({a, b})");
+  });
+
+  it("lifts a dict literal (the hooks.py shape) and round-trips", () => {
+    const { sys, py } = rt('def f(a: int) -> None:\n    print({"x": a, "y": 1})\n');
+    expect(py).toContain('print({"x": a, "y": 1})');
+    // Cross-compiles to a TS Map — a one-way emit.
+    expect(transpile(sys, "ts")).toContain('new Map([["x", a], ["y", 1]])');
+  });
+
+  it("lifts an empty dict literal (the hooks.py `{}`) and round-trips", () => {
+    const { py } = rt("def f() -> None:\n    print({})\n");
+    expect(py).toContain("print({})");
+  });
+
+  it("lifts a single-element set literal and round-trips", () => {
+    const { py } = rt("def f(a: int) -> None:\n    print({a})\n");
+    expect(py).toContain("print({a})");
+  });
+
+  it("cross-compiles tuple→array and set→new Set in TS", () => {
+    const sys = liftPython("def f(a: int, b: int) -> None:\n    print((a, b))\n    print({a, b})\n");
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("console.log([a, b]);");
+    expect(ts).toContain("console.log(new Set([a, b]));");
+  });
+
+  it("refuses a starred element in a tuple literal (deferred)", () => {
+    expect(() => liftPython("def f(xs: list) -> None:\n    print((1, *xs))\n")).toThrow(/starred element/);
+  });
+
+  it("refuses a dict-unpacking entry (deferred)", () => {
+    expect(() => liftPython("def f(d: dict) -> None:\n    print({**d, 'x': 1})\n")).toThrow(/dict-unpacking/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: Python for-each (collection loop)", () => {
   const SRC = "def print_all(items: list) -> None:\n    for item in items:\n        print(item)\n";
 
