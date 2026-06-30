@@ -432,6 +432,26 @@ def _stmt(s):
         if h.name:
             out["catchParam"] = h.name
         return out
+    if isinstance(s, ast.With):
+        # A context-managed block `with ctx as r: body`. Only a single context
+        # manager with an optional plain-name `as` binding is modelled; multiple
+        # items (`with a, b:`), a tuple/attribute target, or `async with` is a
+        # distinct construct refused loudly rather than dropped.
+        if len(s.items) != 1:
+            raise SystemExit("lift(py): unsupported with multiple context managers (`with a, b:`, deferred)")
+        item = s.items[0]
+        out = {"t": "with", "context": expr(item.context_expr), "body": [stmt(x) for x in s.body]}
+        if item.optional_vars is not None:
+            if not isinstance(item.optional_vars, ast.Name):
+                raise SystemExit("lift(py): unsupported with-target (only a single `as name`, not unpacking)")
+            out["resource"] = item.optional_vars.id
+        return out
+    if isinstance(s, ast.Assert):
+        # `assert cond` / `assert cond, message` — a control-sequenced effect node.
+        out = {"t": "assert", "cond": expr(s.test)}
+        if s.msg is not None:
+            out["message"] = expr(s.msg)
+        return out
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 

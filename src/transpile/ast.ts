@@ -108,6 +108,20 @@ export type Stmt = { span?: SourceSpan } & (
    */
   | { t: "try"; body: Stmt[]; catchParam?: string; handler: Stmt[] }
   /**
+   * A context-managed block: `with context as resource: body` (Python). The
+   * context manager `context` is entered, its value bound to `resource` (absent
+   * for `with context:` / no `as`), the `body` runs, and the manager exits on the
+   * way out. Python renders it faithfully (a source fixed point); TS has no `with`
+   * context-manager, so it cross-compiles ONE-WAY to a `using` disposable block.
+   */
+  | { t: "with"; context: Expr; resource?: string; body: Stmt[] }
+  /**
+   * An assertion: `assert cond` / `assert cond, message`. A control-sequenced
+   * effect that raises when `cond` is falsy. Python renders it faithfully; TS has
+   * no `assert` statement, so it cross-compiles ONE-WAY to `console.assert(...)`.
+   */
+  | { t: "assert"; cond: Expr; message?: Expr }
+  /**
    * Raise an exception carrying a message expression. Terminal: control escapes,
    * so nothing falls through after it. `errorType` names the error constructor for
    * a typed/custom error; absent ⇒ the catch-all `Error`/`Exception` (the raising

@@ -1772,3 +1772,67 @@ describe("lift: method & attribute access on self/locals (TS)", () => {
     expect(() => transpile(liftTypeScript(src), "ts")).toThrow(/bare "self"\/"this"/);
   });
 });
+
+describe.skipIf(!hasPython())("lift: with statement & assert (item 15, Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("lifts `with ctx as r:` to a with node and round-trips", () => {
+    const { sys, py } = rt(
+      "def run(name: str) -> int:\n    with make(name) as f:\n        x = read(f)\n    return x\n",
+    );
+    expect(py).toContain("with make(name) as f:");
+    expect(py).toContain("x = read(f)");
+    const node = sys.modules["run"]!.interior.nodes.find((n) => n.kind === "with")!;
+    expect(node.label).toBe("f");
+    expect(nodeKinds(sys, "run")).toContain("with");
+  });
+
+  it("lifts a with WITHOUT an `as` binding and round-trips", () => {
+    const { sys, py } = rt(
+      "def silent(name: str) -> None:\n    with lock():\n        do(name)\n",
+    );
+    expect(py).toContain("with lock():");
+    expect(sys.modules["silent"]!.interior.nodes.find((n) => n.kind === "with")!.label).toBe("");
+  });
+
+  it("cross-compiles a with to a TS `using` disposable block (one-way)", () => {
+    const sys = liftPython("def run(name: str) -> None:\n    with make(name) as f:\n        do(f)\n");
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("using f = make(name);");
+  });
+
+  it("lifts `assert cond, message` and round-trips", () => {
+    const { sys, py } = rt(
+      'def check(n: int) -> None:\n    assert n > 0, "must be positive"\n',
+    );
+    expect(py).toContain('assert (n > 0), "must be positive"');
+    expect(nodeKinds(sys, "check")).toContain("assert");
+  });
+
+  it("lifts a bare `assert cond` (no message) and round-trips", () => {
+    const { py } = rt("def check(ok: bool) -> None:\n    assert ok\n");
+    expect(py).toContain("assert ok");
+    expect(py).not.toContain(",");
+  });
+
+  it("cross-compiles assert to `console.assert` (one-way)", () => {
+    const sys = liftPython('def check(n: int) -> None:\n    assert n > 0, "bad"\n');
+    expect(transpile(sys, "ts")).toContain('console.assert((n > 0), "bad");');
+  });
+
+  it("refuses multiple context managers `with a, b:` (deferred)", () => {
+    expect(() => liftPython("def f() -> None:\n    with a() as x, b() as y:\n        do(x)\n")).toThrow(/multiple context managers/);
+  });
+
+  it("refuses a non-name with-target (deferred)", () => {
+    expect(() => liftPython("def f(d: dict) -> None:\n    with mgr() as d.x:\n        do(d)\n")).toThrow(/with-target/);
+  });
+});

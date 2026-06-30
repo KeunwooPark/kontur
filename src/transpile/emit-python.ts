@@ -170,6 +170,15 @@ function stmt(s: Stmt, indent: string): string[] {
       for (const h of s.handler) out.push(...stmt(h, indent + "    "));
       return out;
     }
+    case "with": {
+      const head = s.resource ? `with ${expr(s.context)} as ${snake(s.resource)}:` : `with ${expr(s.context)}:`;
+      const out = [`${indent}${head}`];
+      for (const b of s.body) out.push(...stmt(b, indent + "    "));
+      return out;
+    }
+    case "assert": {
+      return [`${indent}assert ${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""}`];
+    }
   }
 }
 

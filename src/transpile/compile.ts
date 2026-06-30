@@ -229,6 +229,29 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "with") {
+        // `label` carries the `as` resource binding (empty ⇒ no `as` clause).
+        const v = identifier(node.label);
+        stmts.push({
+          t: "with",
+          context: this.resolveInput(node.id, "context"),
+          ...(v ? { resource: v } : {}),
+          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+        });
+        cur = this.controlTargetFrom(`${node.id}:done`);
+        continue;
+      }
+
+      if (node.kind === "assert") {
+        stmts.push({
+          t: "assert",
+          cond: this.resolveInput(node.id, "cond"),
+          ...(this.dataSrc.has(`${node.id}:message`) ? { message: this.resolveInput(node.id, "message") } : {}),
+        });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "throw") {
         // Terminal: control escapes here, so the chain stops — like a branch arm.
         // `errorType` (if any) carries the typed/custom error constructor forward.
@@ -477,6 +500,10 @@ class ModuleCompiler {
     }
     // A try's caught-error binding, read inside its handler.
     if (src.kind === "try" && ep.port === "error") {
+      return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // A with's `as` resource binding, read inside its body.
+    if (src.kind === "with" && ep.port === "resource") {
       return { t: "var", name: identifier(src.label) || src.id };
     }
     // An unpack node's element out-port "i" → the i-th destructured name.

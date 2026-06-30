@@ -344,6 +344,27 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       lowerBlock(ctx, s.handler, `${id}:catch`);
       return `${id}:done`;
     }
+    case "with": {
+      // A context-managed block. The context manager flows in on "context"; the
+      // bound `as` value (if any) is a data-out "resource", bound BEFORE lowering
+      // the body that reads it — like a try's catch var. The body runs on "body",
+      // then control continues at "done".
+      const id = newNode(ctx, { kind: "with", label: s.resource ?? "" }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.context), `${id}:context`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      if (s.resource) ctx.varMap.set(s.resource, `${id}:resource`);
+      lowerBlock(ctx, s.body, `${id}:body`);
+      return `${id}:done`;
+    }
+    case "assert": {
+      // A control-sequenced effect: the predicate flows in on "cond", the optional
+      // message on "message"; control falls through on "done".
+      const id = newNode(ctx, { kind: "assert", label: "assert" }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
+      if (s.message) ctx.wires.push([lowerExpr(ctx, s.message), `${id}:message`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
     case "assign": {
       // Single-assignment dataflow: a reassignment is not a node — it rebinds the
       // name to a fresh data source. The RHS is lowered against the CURRENT
@@ -675,6 +696,7 @@ function foldNested(s: Stmt): Stmt {
     case "for": return { ...s, body: foldGuards(s.body) };
     case "while": return { ...s, body: foldGuards(s.body) };
     case "foreach": return { ...s, body: foldGuards(s.body) };
+    case "with": return { ...s, body: foldGuards(s.body) };
     case "try": return { ...s, body: foldGuards(s.body), handler: foldGuards(s.handler) };
     default: return s;
   }
@@ -726,6 +748,7 @@ function assertSupported(fn: Fn): void {
     if (s.t === "for") s.body.forEach(forbidNested);
     if (s.t === "while") s.body.forEach(forbidNested);
     if (s.t === "foreach") s.body.forEach(forbidNested);
+    if (s.t === "with") s.body.forEach(forbidNested);
     if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   };
   fn.body.forEach((s, i) => {
@@ -735,6 +758,7 @@ function assertSupported(fn: Fn): void {
     else if (s.t === "for") s.body.forEach(forbidNested);
     else if (s.t === "while") s.body.forEach(forbidNested);
     else if (s.t === "foreach") s.body.forEach(forbidNested);
+    else if (s.t === "with") s.body.forEach(forbidNested);
     else if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   });
 }
@@ -793,7 +817,7 @@ function failCarried(fnName: string, name: string, why: string): never {
 function forEachChildBlock(s: Stmt, fn: (block: Stmt[]) => void): void {
   switch (s.t) {
     case "if": fn(s.then); fn(s.else); break;
-    case "for": case "while": case "foreach": fn(s.body); break;
+    case "for": case "while": case "foreach": case "with": fn(s.body); break;
     case "try": fn(s.body); fn(s.handler); break;
   }
 }
@@ -827,6 +851,8 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
       case "for": exprReads(s.from, out); exprReads(s.to, out); break;
       case "while": exprReads(s.cond, out); break;
       case "foreach": exprReads(s.iter, out); break;
+      case "with": exprReads(s.context, out); break;
+      case "assert": exprReads(s.cond, out); if (s.message) exprReads(s.message, out); break;
     }
     forEachChildBlock(s, (b) => blockReads(b, out));
   }
@@ -900,6 +926,8 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "for": expose(readsOf(s.from)); expose(readsOf(s.to)); nested(s.body, s.varName); break;
       case "while": expose(readsOf(s.cond)); nested(s.body); break;
       case "foreach": expose(readsOf(s.iter)); nested(s.body, ...(s.names ?? [s.varName])); break;
+      case "with": expose(readsOf(s.context)); nested(s.body, s.resource); break;
+      case "assert": expose(readsOf(s.cond)); if (s.message) expose(readsOf(s.message)); break;
       case "try": nested(s.body); nested(s.handler, s.catchParam); break;
     }
   }

@@ -186,6 +186,20 @@ function stmt(s: Stmt, indent: string): string[] {
       out.push(`${indent}}`);
       return out;
     }
+    case "with": {
+      // TS has no Python `with`; cross-compile ONE-WAY to a `using` disposable
+      // block (TS 5.2+) — the resource is disposed at the block's close. A no-`as`
+      // context still binds a throwaway so the manager's enter/exit runs.
+      const r = s.resource ? camel(s.resource) : "_ctx";
+      const out = [`${indent}{`, `${indent}  using ${r} = ${expr(s.context)};`];
+      for (const b of s.body) out.push(...stmt(b, indent + "  "));
+      out.push(`${indent}}`);
+      return out;
+    }
+    case "assert": {
+      // No TS `assert` statement; cross-compile ONE-WAY to `console.assert`.
+      return [`${indent}console.assert(${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""});`];
+    }
   }
 }
 
