@@ -317,6 +317,22 @@ def _stmt(s):
         if isinstance(t.slice, ast.Slice):
             raise SystemExit("lift(py): unsupported slice-assignment target (`d[1:3] = v`, deferred)")
         return {"t": "indexSet", "obj": expr(t.value), "key": expr(t.slice), "value": expr(s.value)}
+    if isinstance(s, ast.AnnAssign):
+        # An annotated assignment `x: T = v`. The IR treats locals untyped (only
+        # params/returns carry types), so the annotation is dropped and the
+        # statement normalizes to the matching plain-assignment shape — a source
+        # rewrite (`x: T = v` → `x = v`), a fixed point thereafter. A bare
+        # annotation with NO value (`x: T`, a forward declaration) carries no
+        # dataflow, so it is refused rather than invented.
+        if s.value is None:
+            raise SystemExit("lift(py): unsupported bare annotation (`x: T` with no value, forward declaration)")
+        if isinstance(s.target, ast.Name):
+            return {"t": "let", "name": s.target.id, "expr": expr(s.value)}
+        if isinstance(s.target, ast.Attribute) and isinstance(s.target.value, ast.Name) and s.target.value.id == "self":
+            return {"t": "stateSet", "attr": s.target.attr, "value": expr(s.value)}
+        if isinstance(s.target, ast.Attribute):
+            return {"t": "attrSet", "obj": expr(s.target.value), "attr": s.target.attr, "value": expr(s.value)}
+        raise SystemExit("lift(py): unsupported annotated-assignment target")
     if isinstance(s, ast.AugAssign):
         # `x += y` desugars to `x = x + y` — the augmented op unfolds to the plain
         # binary op over the target's CURRENT value and the RHS. This mirrors the TS

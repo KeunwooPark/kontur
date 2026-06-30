@@ -1396,6 +1396,31 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: annotated assignment statement (item 21, slice A)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a local `x: T = v` as a plain bind (annotation normalized away)", () => {
+    const { py } = rt("def f(d: dict, key: str) -> int:\n    hook_list: list = d.get(key)\n    return count(hook_list)\n");
+    expect(py).toContain("hook_list = d.get(key)");
+    expect(py).not.toContain(": list");
+  });
+
+  it("lifts an annotated self-attribute write `self.x: T = v` as stateSet", () => {
+    const { sys } = rt("class C:\n    def setup(self, n: int) -> None:\n        self.count: int = n\n");
+    expect(sys.modules["C.setup"]!.interior.nodes.map((nn) => nn.kind)).toContain("stateSet");
+  });
+
+  it("refuses a bare annotation `x: T` (no value, forward declaration)", () => {
+    expect(() => liftPython("def f() -> None:\n    x: int\n    print(x)\n")).toThrow(/bare annotation/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: early/branch returns — multi-exit (item 18)", () => {
   const rt = (src: string) => {
     const sys = liftPython(src);
