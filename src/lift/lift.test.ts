@@ -1856,6 +1856,24 @@ describe("lift: behavioral round-trip preserves observable behavior (TS)", () =>
   }
 });
 
+describe.skipIf(!hasPython())("lift: refuses closures / lambdas / cross-scope (items 12, 23)", () => {
+  it("refuses a lambda (anonymous function / closure capture)", () => {
+    expect(() => liftPython("def f(xs: list) -> list:\n    return sort(xs, key=lambda x: x)\n")).toThrow(/lambda/);
+  });
+  it("refuses a nested function (closure capture)", () => {
+    expect(() => liftPython("def outer(n: int) -> int:\n    def inner(x: int) -> int:\n        return x + n\n    return inner(n)\n")).toThrow(/nested function/);
+  });
+  it("refuses a `global` declaration (cross-scope mutation)", () => {
+    expect(() => liftPython("def f() -> None:\n    global COUNT\n    COUNT = 1\n")).toThrow(/global declaration/);
+  });
+  it("refuses a `nonlocal` declaration (cross-scope mutation)", () => {
+    expect(() => liftPython("def f() -> None:\n    x = 0\n    nonlocal y\n    y = x\n")).toThrow(/nonlocal declaration/);
+  });
+  it("refuses a `del` statement", () => {
+    expect(() => liftPython("def f(d: dict, k: str) -> None:\n    del d[k]\n")).toThrow(/del/);
+  });
+});
+
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
   it("lifts a loop accumulator (carried IN, item 19) as iter-args and round-trips", () => {
     // `total = total + i` reads `total` from the prior iteration — a loop-carried

@@ -94,6 +94,14 @@ def attr_root(e):
 def expr(e):
     if isinstance(e, ast.Constant):
         return {"t": "lit", "value": e.value}
+    # A lambda is an anonymous function that captures its enclosing scope (a
+    # closure). The IR models functions as named, flat modules with explicit
+    # param/return boundaries — it has no anonymous-function node and no closure
+    # capture — so a lambda is refused loudly (deferred), not approximated.
+    if isinstance(e, ast.Lambda):
+        raise SystemExit("lift(py): unsupported lambda (anonymous function / closure capture has no IR node, deferred)")
+    if isinstance(e, ast.NamedExpr):
+        raise SystemExit("lift(py): unsupported walrus assignment expression (`x := y`, deferred)")
     # `self` is the ambient method receiver, never a value on its own; it only
     # rides as the receiver of a method call or the base of `self.attr`.
     if isinstance(e, ast.Name) and e.id == "self":
@@ -519,6 +527,21 @@ def _stmt(s):
         if s.msg is not None:
             out["message"] = expr(s.msg)
         return out
+    # A nested function/class is a closure capturing the enclosing scope; the IR has
+    # only flat, named modules with explicit boundaries — no closure capture — so it
+    # is refused loudly (deferred), not silently flattened.
+    if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        raise SystemExit("lift(py): unsupported nested function (closure capture has no IR node, deferred)")
+    if isinstance(s, ast.ClassDef):
+        raise SystemExit("lift(py): unsupported nested class (deferred)")
+    # `global x` / `nonlocal x` declare that an assignment targets an ENCLOSING /
+    # module scope — cross-scope mutation the IR's per-function dataflow cannot
+    # represent (the value would silently rebind a local). Refuse, do not lie.
+    if isinstance(s, (ast.Global, ast.Nonlocal)):
+        kind = "global" if isinstance(s, ast.Global) else "nonlocal"
+        raise SystemExit("lift(py): unsupported " + kind + " declaration (cross-scope mutation has no IR node, deferred)")
+    if isinstance(s, ast.Delete):
+        raise SystemExit("lift(py): unsupported `del` statement (deferred)")
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 
