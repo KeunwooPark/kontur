@@ -83,6 +83,8 @@ function expr(e: Expr): string {
     }
     case "await":
       return `await ${expr(e.value)}`;
+    case "global":
+      return e.name; // a module-constant reference, emitted verbatim
     case "itercomp": {
       // TS has no comprehension syntax; cross-compile to a filter/map chain (a
       // one-way emit, like the range comprehension above). `if` becomes `.filter`,
@@ -321,5 +323,9 @@ export function emitTypeScript(program: Program): string {
   const chunks = [...program.classes.map(cls), ...program.functions.map((f) => fn(f))];
   const body = chunks.join("\n\n") + "\n";
   const imports = (program.imports ?? []).map(importLine);
-  return imports.length > 0 ? imports.join("\n") + "\n\n" + body : body;
+  // Module-level constants — the value text is Python-source verbatim (a one-way
+  // cross-compile for non-literal values); most literals are valid TS as-is.
+  const consts = (program.consts ?? []).map((c) => `const ${c.name} = ${c.value};`);
+  const preamble = [...imports, ...(imports.length && consts.length ? [""] : []), ...consts];
+  return preamble.length > 0 ? preamble.join("\n") + "\n\n" + body : body;
 }

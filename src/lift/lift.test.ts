@@ -1400,6 +1400,33 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: module-level constants (item 21, slice B)", () => {
+  it("captures a module constant + a function reference, round-trips (Python)", () => {
+    const src = 'HOOKS = ["response"]\n\ndef default_hooks() -> dict:\n    return {event: [] for event in HOOKS}\n';
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.consts).toMatchObject([{ name: "HOOKS", value: "['response']" }]);
+    expect(sys.modules["default_hooks"]!.interior.nodes.map((n) => n.kind)).toContain("globalRef");
+    const py = transpile(sys, "python");
+    expect(py).toContain("HOOKS = ['response']");
+    expect(py).toContain("for event in HOOKS");
+    expect(transpile(liftPython(py), "python")).toBe(py); // fixed point (after quote-normalize)
+  });
+
+  it("captures an annotated module constant (`X: T = v`)", () => {
+    const sys = liftPython("MAX: int = 10\n\ndef cap(n: int) -> int:\n    return min(n, MAX)\n");
+    expect(sys.consts).toMatchObject([{ name: "MAX", value: "10" }]);
+    expect(transpile(sys, "python")).toContain("MAX = 10");
+  });
+
+  it("re-declares the constant at module scope in TS too", () => {
+    const sys = liftPython('NAMES = ["a", "b"]\n\ndef first() -> str:\n    return pick(NAMES)\n');
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("const NAMES = ['a', 'b'];");
+    expect(ts).toContain("pick(NAMES)");
+  });
+});
+
 describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)", () => {
   const rt = (src: string) => {
     const sys = liftPython(src);

@@ -67,6 +67,10 @@ export type Expr =
   /** Await an awaitable: `await value` (only inside an async function). A pure
    *  value transform — the awaited result flows out. */
   | { t: "await"; value: Expr }
+  /** A reference to a module-level constant (a free identifier). Emitted verbatim
+   *  (the name must match its module-scope declaration); the constant itself is
+   *  re-declared at module scope from `Program.consts`. */
+  | { t: "global"; name: string }
   | { t: "call"; name: string; args: Expr[]; recv?: Expr; external?: boolean;
       /** `*x` positional-unpack arguments, in order (`f(*a, *b)`). */
       starArgs?: Expr[];
@@ -277,9 +281,19 @@ export interface Import {
   span?: SourceSpan;
 }
 
+/** A module-level constant: a bound name + its VERBATIM value source text
+ *  (e.g. `HOOKS` / `["response"]`). Re-declared at module scope on emit. */
+export interface Const {
+  name: string;
+  value: string;
+  span?: SourceSpan;
+}
+
 export interface Program {
   functions: Fn[];
   classes: Class[];
   /** Imports in source order. Optional for back-compat with older callers. */
   imports?: Import[];
+  /** Module-level constants in source order. */
+  consts?: Const[];
 }

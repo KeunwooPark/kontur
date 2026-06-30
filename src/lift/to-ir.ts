@@ -118,6 +118,14 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
   const system: System = { features, modules };
   // Record imports verbatim so the transpiler can reproduce them (round-trip
   // fidelity). Mapped span → prov to match the IR's provenance field name.
+  if (program.consts && program.consts.length > 0) {
+    system.consts = program.consts.map((c) => ({
+      name: c.name,
+      value: c.value,
+      ...(c.span ? { prov: c.span } : {}),
+      ...(lift.origin ? { origin: lift.origin } : {}),
+    }));
+  }
   if (program.imports && program.imports.length > 0) {
     system.imports = program.imports.map(
       (imp): Import => ({
@@ -685,6 +693,11 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       const id = newNode(ctx, { kind: "await", label: "await" });
       ctx.wires.push([lowerExpr(ctx, e.value), `${id}:x`, "data"]);
       return id;
+    }
+    case "global": {
+      // A reference to a module-level constant: a pure, input-less node carrying
+      // the name (declared at module scope, emitted verbatim).
+      return newNode(ctx, { kind: "globalRef", label: e.name });
     }
     case "slice": {
       // A slice read `obj[start:stop]`: the receiver on "obj", each PRESENT bound on

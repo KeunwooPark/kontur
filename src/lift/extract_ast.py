@@ -19,6 +19,9 @@ UNARYOP = {ast.Not: "not", ast.USub: "neg", ast.UAdd: "pos", ast.Invert: "bitnot
 # call is only accepted when `base` is one of these — so a package member call
 # (`math.sqrt(x)`) lifts, while a self/local member call stays a loud reject.
 IMPORTED_NAMES = set()
+# Module-level constant names (filled before walking bodies). A bare reference to
+# one is a free identifier (`{t:"global"}`), re-declared at module scope.
+MODULE_GLOBALS = set()
 
 
 def call_name(func):
@@ -106,6 +109,10 @@ def expr(e):
     # rides as the receiver of a method call or the base of `self.attr`.
     if isinstance(e, ast.Name) and e.id == "self":
         return {"t": "self"}
+    if isinstance(e, ast.Name) and e.id in MODULE_GLOBALS:
+        # A reference to a module-level constant — a free identifier, emitted
+        # verbatim and re-declared at module scope (round-trips, like an import).
+        return {"t": "global", "name": e.id}
     if isinstance(e, ast.Name):
         return {"t": "var", "name": e.id}
     if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name) and e.value.id == "self":
@@ -737,9 +744,33 @@ def imports_of(tree):
     return out
 
 
+def consts_of(tree):
+    """Module-level constant assignments (`HOOKS = ["response"]`, `__all__ = [...]`,
+    `X: T = v`). Captured as the bound NAME + the VERBATIM value source (ast.unparse,
+    idempotent on its own output → a fixed point), so a function that references the
+    constant resolves it (a free identifier) and the constant round-trips at module
+    scope. Only a single plain-name target is captured; richer top-level statements
+    (an `if`, a tuple target, a bare annotation) are left alone (lifted-what-we-can)."""
+    out = []
+    for n in tree.body:
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+            d = {"name": n.targets[0].id, "value": ast.unparse(n.value)}
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            d = {"name": n.target.id, "value": ast.unparse(n.value)}
+        else:
+            continue
+        sp = span(n)
+        if sp is not None:
+            d["span"] = sp
+        out.append(d)
+    return out
+
+
 tree = ast.parse(sys.stdin.read())
 imports = imports_of(tree)
+consts = consts_of(tree)
 IMPORTED_NAMES = {b["local"] for imp in imports for b in imp["bindings"]}
+MODULE_GLOBALS = {c["name"] for c in consts}
 functions = [func(n) for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 classes = [klass(n) for n in tree.body if isinstance(n, ast.ClassDef)]
-print(json.dumps({"functions": functions, "classes": classes, "imports": imports}))
+print(json.dumps({"functions": functions, "classes": classes, "imports": imports, "consts": consts}))

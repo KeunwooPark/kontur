@@ -195,6 +195,10 @@ export const Node = z.discriminatedUnion("kind", [
   // data-out (the resolved value). Valid only inside an async module. `label` is
   // "await".
   z.object({ ...nodeBase, kind: z.literal("await"), label: z.string() }).strict(),
+  // A reference to a module-level constant (a free identifier). Pure: NO inputs,
+  // one data-out (the constant's value). `label` is the constant name, emitted
+  // verbatim; the constant is declared at module scope from `System.consts`.
+  z.object({ ...nodeBase, kind: z.literal("globalRef"), label: z.string() }).strict(),
   // Yield a value from a generator. A control-sequenced effect (control-in/out),
   // data-in "value" (absent for a bare `yield`); NOT terminal — a yield suspends
   // and resumes, so control continues. `delegate` marks `yield from` (delegating
@@ -414,6 +418,9 @@ export const System = z
     modules: z.record(z.string().min(1), Module),
     /** Package imports in source order. Optional: a graph need carry none. */
     imports: z.array(Import).optional(),
+    /** Module-level constants: a bound name + its verbatim value source, re-declared
+     *  at module scope. `origin` (set by the multi-file driver) scopes it to a file. */
+    consts: z.array(z.object({ name: z.string().min(1), value: z.string(), prov: SourceSpan.optional(), origin: z.string().optional() }).strict()).optional(),
   })
   .strict();
 

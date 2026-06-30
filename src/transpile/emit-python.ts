@@ -64,6 +64,8 @@ function expr(e: Expr): string {
     }
     case "await":
       return `await ${expr(e.value)}`;
+    case "global":
+      return e.name; // a module-constant reference, emitted verbatim
     case "comprehension": {
       // Inclusive range → range(from, to + 1), the inverse the lifter expects.
       const v = snake(e.varName);
@@ -283,5 +285,8 @@ export function emitPython(program: Program): string {
   const chunks = [...program.classes.map(cls), ...program.functions.map((f) => fn(f))];
   const body = chunks.join("\n\n\n") + "\n";
   const imports = (program.imports ?? []).map(importLine);
-  return imports.length > 0 ? imports.join("\n") + "\n\n\n" + body : body;
+  // Module-level constants, re-declared verbatim above the declarations.
+  const consts = (program.consts ?? []).map((c) => `${c.name} = ${c.value}`);
+  const preamble = [...imports, ...(imports.length && consts.length ? [""] : []), ...consts];
+  return preamble.length > 0 ? preamble.join("\n") + "\n\n\n" + body : body;
 }

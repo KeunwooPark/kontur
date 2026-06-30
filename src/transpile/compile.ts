@@ -68,7 +68,11 @@ export function compile(system: System, originFilter?: string): Program {
   const imports = (system.imports ?? [])
     .filter((i) => originFilter === undefined || (i.origin ?? "") === originFilter)
     .map((i) => ({ source: i.source, bindings: i.bindings }));
-  return { functions, classes, imports };
+  // Module-level constants, reproduced verbatim and re-declared at module scope.
+  const consts = (system.consts ?? [])
+    .filter((c) => originFilter === undefined || (c.origin ?? "") === originFilter)
+    .map((c) => ({ name: c.name, value: c.value }));
+  return { functions, classes, imports, ...(consts.length ? { consts } : {}) };
 }
 
 function compileClass(
@@ -422,6 +426,8 @@ class ModuleCompiler {
         return { t: "index", obj: this.resolveInput(node.id, "obj"), key: this.resolveInput(node.id, "key") };
       case "await":
         return { t: "await", value: this.resolveInput(node.id, "x") };
+      case "globalRef":
+        return { t: "global", name: node.label };
       case "slice": {
         // Each bound is present only when its pin is wired (an absent bound is an
         // open slice end, `obj[:3]` / `obj[1:]`).
