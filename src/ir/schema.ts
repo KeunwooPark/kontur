@@ -156,6 +156,15 @@ export const Node = z.discriminatedUnion("kind", [
   // the bound index); data-out "index" (the bound variable) and one default out
   // (the resulting list). `label` is the bound variable name.
   z.object({ ...nodeBase, kind: z.literal("comprehension"), label: z.string() }).strict(),
+  // A comprehension over an ARBITRARY iterable — the pure-value sibling of `foreach`,
+  // exactly as `comprehension` is of the counted `loop`. `form` selects the
+  // collection built: "list" / "set" / "dict" / "generator". Pins: data-in "iter"
+  // (the iterable), then "elem" (the element expression — list/set/generator) OR
+  // "key"+"value" (the dict entry), plus an optional "cond" (an `if` filter);
+  // data-out "item" (the bound variable, read by elem/key/value/cond) and one
+  // default out (the resulting collection). `label` is the bound variable name.
+  // Multi-generator and tuple-unpack targets are refused at lift (deferred).
+  z.object({ ...nodeBase, kind: z.literal("itercomp"), label: z.string(), form: z.enum(["list", "set", "dict", "generator"]) }).strict(),
   // A module node is a hyperlink. Ports are DERIVED from modules[ref].ports.
   // `call`, when present, is the name the caller invokes this link by, used when
   // it differs from the target's declared name: an import alias (`import { f as g }`

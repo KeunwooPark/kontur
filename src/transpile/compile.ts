@@ -308,6 +308,17 @@ class ModuleCompiler {
           to: this.resolveInput(node.id, "to"),
           elem: this.resolveInput(node.id, "elem"),
         };
+      case "itercomp": {
+        const varName = identifier(node.label) || node.id;
+        const iter = this.resolveInput(node.id, "iter");
+        const cond = this.dataSrc.has(`${node.id}:cond`)
+          ? { cond: this.resolveInput(node.id, "cond") }
+          : {};
+        if (node.form === "dict") {
+          return { t: "itercomp", form: "dict", varName, iter, key: this.resolveInput(node.id, "key"), value: this.resolveInput(node.id, "value"), ...cond };
+        }
+        return { t: "itercomp", form: node.form, varName, iter, elem: this.resolveInput(node.id, "elem"), ...cond };
+      }
       case "function": {
         if (node.op && BINARY_OPS.has(node.op)) {
           return { t: "bin", op: node.op, a: this.resolveInput(node.id, "a"), b: this.resolveInput(node.id, "b") };
@@ -390,6 +401,10 @@ class ModuleCompiler {
     }
     // A comprehension's bound variable, read by its element expression.
     if (src.kind === "comprehension" && ep.port === "index") {
+      return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // An iterable comprehension's bound element, read by elem/key/value/cond.
+    if (src.kind === "itercomp" && ep.port === "item") {
       return { t: "var", name: identifier(src.label) || src.id };
     }
     // A foreach's bound element, read inside its body.

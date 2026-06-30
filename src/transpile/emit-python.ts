@@ -51,6 +51,15 @@ function expr(e: Expr): string {
       const v = snake(e.varName);
       return `[${expr(e.elem)} for ${v} in range(${expr(e.from)}, ${expr(e.to)} + 1)]`;
     }
+    case "itercomp": {
+      const v = snake(e.varName);
+      const head = `for ${v} in ${expr(e.iter)}${e.cond ? ` if ${expr(e.cond)}` : ""}`;
+      if (e.form === "dict") return `{${expr(e.key!)}: ${expr(e.value!)} ${head}}`;
+      const body = expr(e.elem!);
+      if (e.form === "set") return `{${body} ${head}}`;
+      if (e.form === "generator") return `(${body} ${head})`;
+      return `[${body} ${head}]`;
+    }
     // A method call renders `recv.method(args)` with the method name verbatim; a
     // package call keeps its library API name verbatim; a local stub is cased.
     case "call": {
