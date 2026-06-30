@@ -807,6 +807,33 @@ describe.skipIf(!hasPython())("lift: augmented assignment desugars to assign(bin
   });
 });
 
+describe.skipIf(!hasPython())("lift: prefix unary operators (-x, +x, ~x) (Python)", () => {
+  it("lifts each arithmetic/bitwise prefix op and is a round-trip fixed point", () => {
+    // Each shares the `un` node alongside logical `not`; `-x`/`+x`/`~x` re-emit
+    // with their own glyph and re-lifting is a fixed point.
+    for (const sym of ["-", "+", "~"] as const) {
+      const src = ["def f(x: int) -> int:", `    return ${sym}x`, ""].join("\n");
+      const sys = liftPython(src);
+      expect(validateSystem(sys).ok).toBe(true);
+      const codeA = transpile(sys, "python");
+      expect(codeA).toContain(`return (${sym}x)`);
+      expect(transpile(liftPython(codeA), "python")).toBe(codeA);
+    }
+  });
+
+  it("cross-compiles `-x` to the same prefix form in TS", () => {
+    const src = ["def f(x: int) -> int:", "    return -x", ""].join("\n");
+    expect(transpile(liftPython(src), "ts")).toContain("return (-x);");
+  });
+
+  it("refuses an unmodelled prefix op (`++x`)", () => {
+    // Increment/decrement are not modelled; the Python source equivalent has no
+    // such form, so this is the TS-side guard exercised via a TS source.
+    const src = "export function f(x: number): number {\n  return ++x;\n}\n";
+    expect(() => liftTypeScript(src)).toThrow(/prefix operator/);
+  });
+});
+
 describe("lift: control & collection constructs round-trip (TS)", () => {
   const cases: { name: string; src: string; expectA: string }[] = [
     {
@@ -830,6 +857,16 @@ describe("lift: control & collection constructs round-trip (TS)", () => {
       name: "reassignment (n += 1)",
       src: "export function tick(n: number): void {\n  n += 1;\n  console.log(n);\n}\n",
       expectA: "console.log((n + 1));",
+    },
+    {
+      name: "prefix negate (-x) → un node",
+      src: "export function neg(x: number): number {\n  return -x;\n}\n",
+      expectA: "return (-x);",
+    },
+    {
+      name: "bitwise not (~x) → un node",
+      src: "export function bnot(x: number): number {\n  return ~x;\n}\n",
+      expectA: "return (~x);",
     },
     {
       name: "array literal",

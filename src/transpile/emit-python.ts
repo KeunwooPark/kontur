@@ -9,6 +9,12 @@ const BIN: Partial<Record<Op, string>> = {
   and: "and", or: "or", concat: "+",
 };
 
+// Prefix unary operators. `not` needs a trailing space (`not x`); the arithmetic
+// ones bind tight (`-x`, `+x`, `~x`).
+const UN: Partial<Record<Op, string>> = {
+  not: "not ", neg: "-", pos: "+", bitnot: "~",
+};
+
 function pyType(irType: string): string {
   switch (irType) {
     case "int": return "int";
@@ -37,7 +43,7 @@ function expr(e: Expr): string {
     case "attr": return `${expr(e.obj)}.${e.name}`;
     case "stateGet": return `self.${snake(e.attr)}`;
     case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
-    case "un": return `(not ${expr(e.x)})`;
+    case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.then)} if ${expr(e.cond)} else ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
     case "comprehension": {

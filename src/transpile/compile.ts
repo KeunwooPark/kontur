@@ -24,6 +24,8 @@ const BINARY_OPS = new Set<Op>([
   "and", "or", "concat",
 ]);
 
+const UNARY_OPS = new Set<Op>(["not", "neg", "pos", "bitnot"]);
+
 /**
  * Lower a System to one neutral `Program`. With `originFilter` given, only the
  * modules + imports from that source file are emitted (the rest of the System is
@@ -310,7 +312,7 @@ class ModuleCompiler {
         if (node.op && BINARY_OPS.has(node.op)) {
           return { t: "bin", op: node.op, a: this.resolveInput(node.id, "a"), b: this.resolveInput(node.id, "b") };
         }
-        if (node.op === "not") {
+        if (node.op && UNARY_OPS.has(node.op)) {
           return { t: "un", op: node.op, x: this.resolveInput(node.id, "x") };
         }
         // An external (package) call carries its source; emit its API name verbatim.

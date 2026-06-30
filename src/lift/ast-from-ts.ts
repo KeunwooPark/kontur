@@ -315,6 +315,15 @@ const AUG_OP: Partial<Record<ts.SyntaxKind, Op>> = {
   [ts.SyntaxKind.PercentEqualsToken]: "mod",
 };
 
+/** Prefix unary operators (`!x`, `-x`, `+x`, `~x`) → the `un` node's op. The
+ * increment/decrement forms (`++x`, `--x`) are NOT here, so they refuse loudly. */
+const PREFIX_UN: Partial<Record<ts.SyntaxKind, Op>> = {
+  [ts.SyntaxKind.ExclamationToken]: "not",
+  [ts.SyntaxKind.MinusToken]: "neg",
+  [ts.SyntaxKind.PlusToken]: "pos",
+  [ts.SyntaxKind.TildeToken]: "bitnot",
+};
+
 /**
  * A template literal lowers to a left-folded `concat` chain over its string
  * parts and interpolations. The IR has no string-interpolation node, but
@@ -354,8 +363,10 @@ function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
     // round-trips as an attribute read, which is faithful at the source level.)
     return { t: "attr", obj: liftExpr(e.expression, sf), name: e.name.text };
   }
-  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
-    return { t: "un", op: "not", x: liftExpr(e.operand, sf) };
+  if (ts.isPrefixUnaryExpression(e)) {
+    const op = PREFIX_UN[e.operator];
+    if (!op) throw new Error(`lift(ts): unsupported prefix operator "${ts.SyntaxKind[e.operator]}"`);
+    return { t: "un", op, x: liftExpr(e.operand, sf) };
   }
   if (ts.isBinaryExpression(e)) {
     const op = BIN_OP[e.operatorToken.kind];

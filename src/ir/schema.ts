@@ -42,12 +42,14 @@ export const WireKind = z.enum(["data", "control"]);
  * JS `%`, Py `%`). A node with no `op` is an opaque named step (stub call).
  *
  * Pin conventions (the names wires use on the `to` endpoint):
- *   binary ops → "a", "b"      unary `not` → "x"      `print` → "value"
+ *   binary ops → "a", "b"      unary ops → "x"      `print` → "value"
  */
 export const Op = z.enum([
   "add", "sub", "mul", "div", "mod",
   "eq", "ne", "lt", "le", "gt", "ge",
   "and", "or", "not",
+  // Arithmetic/bitwise unary ops (operand on pin "x"): `-x`, `+x`, `~x`.
+  "neg", "pos", "bitnot",
   "concat",
   "print",
 ]);
