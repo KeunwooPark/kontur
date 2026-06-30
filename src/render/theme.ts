@@ -36,6 +36,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "continue", glyph: "↺", label: "continue — next iteration" },
   { kind: "return", glyph: "⏎", label: "return — function exit" },
   { kind: "yield", glyph: "⤳", label: "yield — generator output" },
+  { kind: "await", glyph: "⌛", label: "await — resolve awaitable" },
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
   { kind: "select", glyph: "⋔", label: "select — value conditional" },
@@ -140,6 +141,7 @@ export const paper: Theme = {
     continue: { fill: "#f7eef0", stroke: "#a05a72" }, // muted plum — loop escape
     return: { fill: "#e9ecf2", stroke: "#3a4252" }, // ink grey — the function exit (spine end)
     yield: { fill: "#eaf3e8", stroke: "#3f8a4a" }, // green — generator output (stream)
+    await: { fill: "#e4eff7", stroke: "#0072b2" }, // blue — a call-like value transform
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
     select: { fill: "#f6ead0", stroke: "#a86b00" }, // deep amber — a data conditional
@@ -199,6 +201,7 @@ export const ink: Theme = {
     continue: { fill: "#2e1c26", stroke: "#c07a98" },
     return: { fill: "#1e2430", stroke: "#8a96ac" },
     yield: { fill: "#16291a", stroke: "#5aa564" },
+    await: { fill: "#16263f", stroke: "#4f8cf0" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
     select: { fill: "#33270f", stroke: "#d09a3a" },

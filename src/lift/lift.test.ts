@@ -1400,6 +1400,31 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: async / await (item 23)", () => {
+  it("lifts `async def` + `await` and round-trips (Python); TS emits async", () => {
+    const src = "async def fetch_all(urls: list) -> int:\n    return process(await gather(urls))\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["fetch_all"]!.async).toBe(true);
+    expect(sys.modules["fetch_all"]!.interior.nodes.map((n) => n.kind)).toContain("await");
+    const py = transpile(sys, "python");
+    expect(py).toContain("async def fetch_all");
+    expect(py).toContain("await gather(urls)");
+    expect(transpile(liftPython(py), "python")).toBe(py); // fixed point
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("export async function fetchAll");
+    expect(ts).toContain("await gather(urls)");
+  });
+
+  it("round-trips async/await from TypeScript (symmetric)", () => {
+    const src = "export async function load(u: string): number {\n  return parse(await get(u));\n}\n";
+    const ts = transpile(liftTypeScript(src), "ts");
+    expect(ts).toContain("export async function load");
+    expect(ts).toContain("await get(u)");
+    expect(transpile(liftTypeScript(ts), "ts")).toBe(ts); // fixed point
+  });
+});
+
 describe.skipIf(!hasPython())("lift: yield / generators (item 22)", () => {
   const rtg = (src: string) => {
     const sys = liftPython(src);

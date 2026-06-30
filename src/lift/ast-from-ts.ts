@@ -96,7 +96,7 @@ function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
     if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
       fields.push({ name: member.name.text, type: mapType(member.type) });
     } else if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.body) {
-      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true, docOf(member), decoratorsOf(member, sf)));
+      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true, docOf(member), decoratorsOf(member, sf), isAsync(member)));
     } else {
       throw new Error(`lift(ts): unsupported class member "${ts.SyntaxKind[member.kind]}"`);
     }
@@ -117,8 +117,12 @@ function mapType(t: ts.TypeNode | undefined): string {
   }
 }
 
+function isAsync(node: ts.HasModifiers): boolean {
+  return (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
+}
+
 function liftFn(node: ts.FunctionDeclaration, sf: ts.SourceFile): Fn {
-  return liftCallable(node.name!.text, node.parameters, node.type, node.body!, sf, false, docOf(node));
+  return liftCallable(node.name!.text, node.parameters, node.type, node.body!, sf, false, docOf(node), [], isAsync(node));
 }
 
 /** Shared lowering for a function declaration and a class method. */
@@ -131,6 +135,7 @@ function liftCallable(
   isMethod: boolean,
   doc: string | undefined,
   decorators: string[] = [],
+  async = false,
 ): Fn {
   const params: Param[] = parameters.map((p) => {
     const param: Param = { name: (p.name as ts.Identifier).text, type: mapType(p.type) };
@@ -144,7 +149,7 @@ function liftCallable(
       ? []
       : [{ name: "result", type: mapType(type) }];
   const stmts = body.statements.map((s) => liftStmt(s, sf));
-  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}), ...(decorators.length ? { decorators } : {}), ...(doc !== undefined ? { doc } : {}) };
+  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}), ...(async ? { async: true } : {}), ...(decorators.length ? { decorators } : {}), ...(doc !== undefined ? { doc } : {}) };
 }
 
 /** A parameter default, restricted to the forms the IR carries (a literal or a
@@ -414,6 +419,7 @@ function liftTemplate(e: ts.TemplateExpression, sf: ts.SourceFile): Expr {
 
 function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
   if (ts.isParenthesizedExpression(e)) return liftExpr(e.expression, sf);
+  if (ts.isAwaitExpression(e)) return { t: "await", value: liftExpr(e.expression, sf) };
   if (ts.isNumericLiteral(e)) return { t: "lit", value: Number(e.text) };
   if (ts.isStringLiteral(e)) return { t: "lit", value: e.text };
   // A template with no interpolation is just a string literal.

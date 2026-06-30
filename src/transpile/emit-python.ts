@@ -62,6 +62,8 @@ function expr(e: Expr): string {
       if (items.length === 1) return `(${items[0]},)`;
       return `(${items.join(", ")})`;
     }
+    case "await":
+      return `await ${expr(e.value)}`;
     case "comprehension": {
       // Inclusive range → range(from, to + 1), the inverse the lifter expects.
       const v = snake(e.varName);
@@ -249,7 +251,7 @@ function fn(f: Fn, indent = ""): string {
     : "dict";
   // Decorators sit on their own `@<text>` lines above the def, outermost first.
   const lines = (f.decorators ?? []).map((d) => `${indent}@${d}`);
-  lines.push(`${indent}def ${snake(f.name)}(${params}) -> ${ret}:`);
+  lines.push(`${indent}${f.async ? "async " : ""}def ${snake(f.name)}(${params}) -> ${ret}:`);
   const body: string[] = [];
   // The docstring is the first body statement (PEP 257). A doc-only body is a
   // complete Python body, so it needs no `pass` filler.

@@ -81,6 +81,8 @@ function expr(e: Expr): string {
       const v = camel(e.varName);
       return `Array.from({ length: ${expr(e.to)} - ${expr(e.from)} + 1 }, (_, ${v}) => ${expr(e.elem)})`;
     }
+    case "await":
+      return `await ${expr(e.value)}`;
     case "itercomp": {
       // TS has no comprehension syntax; cross-compile to a filter/map chain (a
       // one-way emit, like the range comprehension above). `if` becomes `.filter`,
@@ -282,10 +284,11 @@ function fn(f: Fn, indent = ""): string {
   const params = f.params.map(tsParam).join(", ");
   // A function containing any `yield` is a generator: `function*` / `*method`.
   const star = containsYield(f.body) ? "*" : "";
+  const asy = f.async ? "async " : "";
   // A method drops the `export function` preamble; the class owns it.
   const head = f.isMethod
-    ? `${indent}${star}${camel(f.name)}(${params}): ${returnType(f)} {`
-    : `${indent}export function${star} ${camel(f.name)}(${params}): ${returnType(f)} {`;
+    ? `${indent}${asy}${star}${camel(f.name)}(${params}): ${returnType(f)} {`
+    : `${indent}export ${asy}function${star} ${camel(f.name)}(${params}): ${returnType(f)} {`;
   const lines = f.doc !== undefined ? jsDoc(f.doc, indent) : [];
   // Decorators follow the doc block, each on its own `@<text>` line.
   for (const d of f.decorators ?? []) lines.push(`${indent}@${d}`);

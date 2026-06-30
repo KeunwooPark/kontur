@@ -222,6 +222,7 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
     title: fn.name,
     ports,
     interior: { nodes: ctx.nodes, wires: ctx.wires },
+    ...(fn.async ? { async: true } : {}),
     ...(fn.decorators && fn.decorators.length ? { decorators: fn.decorators } : {}),
     ...(fn.doc !== undefined ? { doc: fn.doc } : {}),
     ...(fn.span ? { prov: fn.span } : {}),
@@ -624,6 +625,12 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       ctx.wires.push([lowerExpr(ctx, e.key), `${id}:key`, "data"]);
       return id;
     }
+    case "await": {
+      // `await x`: a pure value transform — the awaited value flows in on "x".
+      const id = newNode(ctx, { kind: "await", label: "await" });
+      ctx.wires.push([lowerExpr(ctx, e.value), `${id}:x`, "data"]);
+      return id;
+    }
     case "slice": {
       // A slice read `obj[start:stop]`: the receiver on "obj", each PRESENT bound on
       // its pin. An absent bound is an open end (no wire), so it stays open on the
@@ -977,6 +984,7 @@ function exprReads(e: Expr, out: Set<string>): void {
       if (e.cond) exprReads(e.cond, out);
       break;
     case "attr": exprReads(e.obj, out); break;
+    case "await": exprReads(e.value, out); break;
     case "index": exprReads(e.obj, out); exprReads(e.key, out); break;
     case "slice": exprReads(e.obj, out); if (e.start) exprReads(e.start, out); if (e.stop) exprReads(e.stop, out); break;
     case "call":
