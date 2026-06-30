@@ -756,6 +756,57 @@ describe.skipIf(!hasPython())("lift: f-strings lower to the concat op (Python)",
   });
 });
 
+describe.skipIf(!hasPython())("lift: augmented assignment desugars to assign(bin) (Python)", () => {
+  it("lowers `n += 1` to a bin-op reassignment that SSA-inlines into its use", () => {
+    // Like the TS lifter, `+=` is a pure rebind: `n += 1; print(n)` collapses to
+    // `print((n + 1))`, and re-lifting that is a fixed point (the `+=` sugar is gone).
+    const src = ["def tick(n: int) -> None:", "    n += 1", "    print(n)", ""].join("\n");
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("print((n + 1))");
+    const codeB = transpile(liftPython(codeA), "python");
+    expect(codeB).toBe(codeA);
+  });
+
+  it("cross-compiles `n += 1` to the same `+` chain in TS", () => {
+    const src = ["def tick(n: int) -> None:", "    n += 1", "    print(n)", ""].join("\n");
+    expect(transpile(liftPython(src), "ts")).toContain("console.log((n + 1));");
+  });
+
+  it("desugars every modelled augmented operator (-= *= /= %=)", () => {
+    for (const [aug, want] of [["-=", "-"], ["*=", "*"], ["/=", "/"], ["%=", "%"]] as const) {
+      const src = ["def f(n: int) -> None:", `    n ${aug} 2`, "    print(n)", ""].join("\n");
+      expect(transpile(liftPython(src), "python")).toContain(`print((n ${want} 2))`);
+    }
+  });
+
+  it("desugars `self.attr += y` to a stateSet over the current state", () => {
+    const src = [
+      "class Counter:",
+      "    total: int",
+      "    def bump(self, by: int) -> None:",
+      "        self.total += by",
+      "",
+    ].join("\n");
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("self.total = (self.total + by)");
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA);
+  });
+
+  it("refuses an unmodelled augmented operator (`**=`)", () => {
+    const src = ["def f(n: int) -> None:", "    n **= 2", "    print(n)", ""].join("\n");
+    expect(() => liftPython(src)).toThrow(/augmented-assignment operator/);
+  });
+
+  it("refuses a subscript lvalue target (`d[k] += v` needs item 13)", () => {
+    const src = ["def f(d: dict, k: int) -> None:", "    d[k] += 1", "    print(d)", ""].join("\n");
+    expect(() => liftPython(src)).toThrow(/augmented-assignment target/);
+  });
+});
+
 describe("lift: control & collection constructs round-trip (TS)", () => {
   const cases: { name: string; src: string; expectA: string }[] = [
     {

@@ -184,6 +184,26 @@ def _stmt(s):
         return {"t": "stateSet", "attr": s.targets[0].attr, "value": expr(s.value)}
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
         return {"t": "let", "name": s.targets[0].id, "expr": expr(s.value)}
+    if isinstance(s, ast.AugAssign):
+        # `x += y` desugars to `x = x + y` — the augmented op unfolds to the plain
+        # binary op over the target's CURRENT value and the RHS. This mirrors the TS
+        # lifter (AUG_OP in ast-from-ts.ts), so both backends produce the same IR; it
+        # is a SOURCE-level fixed point (the first transpile rewrites `+=` to `x = x + y`,
+        # like f-strings). Only the binary ops we model are accepted; a `**=`/`//=`/
+        # bit-op augmentation refuses loudly. A subscript or general-attribute lvalue
+        # target (`d[k] += v`, `obj.attr += v`) needs an lvalue model (item 13), so it
+        # is refused too — only a bare name or `self.attr` (the two lvalues we already
+        # write via `let`/`stateSet`) are supported.
+        if type(s.op) not in BINOP:
+            raise SystemExit("lift(py): unsupported augmented-assignment operator (only += -= *= /= %= are modelled)")
+        op = BINOP[type(s.op)]
+        if isinstance(s.target, ast.Name):
+            cur = {"t": "var", "name": s.target.id}
+            return {"t": "assign", "name": s.target.id, "expr": {"t": "bin", "op": op, "a": cur, "b": expr(s.value)}}
+        if isinstance(s.target, ast.Attribute) and isinstance(s.target.value, ast.Name) and s.target.value.id == "self":
+            cur = {"t": "stateGet", "attr": s.target.attr}
+            return {"t": "stateSet", "attr": s.target.attr, "value": {"t": "bin", "op": op, "a": cur, "b": expr(s.value)}}
+        raise SystemExit("lift(py): unsupported augmented-assignment target (only a name or self.attr; a subscript/attribute lvalue needs item 13)")
     if isinstance(s, ast.Return):
         # A bare `return` (or `return None`) carries no value to wire to the out
         # port. It is almost always an early exit (multi-exit control flow), which
