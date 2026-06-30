@@ -233,9 +233,17 @@ describe.skipIf(!hasPython())("lift: package imports (Python)", () => {
 // lifted "successfully" but lost real structure. They now refuse loudly until
 // items 4-6 give them a faithful IR home.
 describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)", () => {
-  it("refuses a function decorator", () => {
-    const src = "@deco\ndef f() -> None:\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/decorator/);
+  // Item 6 turned plain decorators into real captured IR (see "lift: decorators"
+  // below). @staticmethod / @classmethod stay refused — they drop/rename the
+  // implicit receiver, a parameter-contract change beyond metadata capture.
+  it("refuses @staticmethod (alters the implicit receiver)", () => {
+    const src = "class C:\n    @staticmethod\n    def f(x: int) -> int:\n        return x\n";
+    expect(() => liftPython(src)).toThrow(/staticmethod/);
+  });
+
+  it("refuses @classmethod (alters the implicit receiver)", () => {
+    const src = "class C:\n    @classmethod\n    def f(cls, x: int) -> int:\n        return x\n";
+    expect(() => liftPython(src)).toThrow(/classmethod/);
   });
 
   // Item 4 turned defaults, *args/**kwargs, and keyword-only params into real
@@ -262,11 +270,6 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
   it("refuses a non-name base expression (Generic[T])", () => {
     const src = "class C(Generic[T]):\n    pass\n";
     expect(() => liftPython(src)).toThrow(/base class expression/);
-  });
-
-  it("refuses a class decorator", () => {
-    const src = "@deco\nclass C:\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/decorator/);
   });
 });
 
@@ -464,6 +467,102 @@ describe("lift: class inheritance (TS)", () => {
   it("refuses an `implements` clause (no IR home)", () => {
     const src = "export class C implements I {\n}\n";
     expect(() => liftTypeScript(src)).toThrow(/implements/);
+  });
+});
+
+// Roadmap item 6: decorators. Captured VERBATIM (sans `@`) as opaque metadata on
+// the function/method/class module — like base classes — and re-emitted as
+// `@<text>` lines, so a decorated definition round-trips. @staticmethod /
+// @classmethod stay refused (they alter the implicit receiver, see above).
+describe.skipIf(!hasPython())("lift: decorators (Python)", () => {
+  const roundtrips = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain(src.trimEnd());
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA); // fixed point
+    return sys;
+  };
+
+  it("captures a bare-name function decorator and round-trips it", () => {
+    const sys = roundtrips("@overload\ndef f(x: int) -> int:\n    return x\n");
+    expect(sys.modules["f"]!.decorators).toEqual(["overload"]);
+  });
+
+  it("captures a dotted-name function decorator and round-trips it", () => {
+    const sys = roundtrips("@contextlib.contextmanager\ndef f(x: int) -> int:\n    return x\n");
+    expect(sys.modules["f"]!.decorators).toEqual(["contextlib.contextmanager"]);
+  });
+
+  it("captures a call decorator (with args) and round-trips it", () => {
+    const sys = roundtrips("@app.route('/x', methods=['GET'])\ndef f(x: int) -> int:\n    return x\n");
+    expect(sys.modules["f"]!.decorators).toEqual(["app.route('/x', methods=['GET'])"]);
+  });
+
+  it("captures stacked decorators outermost-first and round-trips them", () => {
+    const sys = roundtrips("@a\n@b.c\ndef f(x: int) -> int:\n    return x\n");
+    expect(sys.modules["f"]!.decorators).toEqual(["a", "b.c"]);
+  });
+
+  it("captures a @property method decorator and round-trips it", () => {
+    const src = [
+      "class Box:",
+      "    value: int",
+      "",
+      "    @property",
+      "    def size(self) -> int:",
+      "        return self.value",
+      "",
+    ].join("\n");
+    const sys = roundtrips(src);
+    expect(sys.modules["Box.size"]!.decorators).toEqual(["property"]);
+  });
+
+  it("captures a class decorator and round-trips it", () => {
+    const sys = roundtrips("@runtime_checkable\nclass C:\n    pass\n");
+    expect(sys.modules["C"]!.decorators).toEqual(["runtime_checkable"]);
+  });
+});
+
+describe("lift: decorators (TS)", () => {
+  it("captures a class decorator and round-trips it", () => {
+    const src = [
+      "@sealed",
+      "export class Box {",
+      "  value: number;",
+      "",
+      "  size(): number {",
+      "    return this.value;",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["Box"]!.decorators).toEqual(["sealed"]);
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toContain("@sealed\nexport class Box {");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+  });
+
+  it("captures a method decorator and round-trips it", () => {
+    const src = [
+      "export class Box {",
+      "  value: number;",
+      "",
+      "  @enumerable(false)",
+      "  size(): number {",
+      "    return this.value;",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["Box.size"]!.decorators).toEqual(["enumerable(false)"]);
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toContain("  @enumerable(false)\n  size(): number {");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
   });
 });
 
