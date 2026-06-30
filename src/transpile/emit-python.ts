@@ -195,6 +195,9 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}assert ${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""}`];
     }
     case "pass": return [`${indent}pass`];
+    case "yield":
+      if (s.value === undefined) return [`${indent}yield`];
+      return [`${indent}yield ${s.delegate ? "from " : ""}${expr(s.value)}`];
     case "break": return [`${indent}break`];
     case "continue": return [`${indent}continue`];
   }

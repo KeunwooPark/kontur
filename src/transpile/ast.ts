@@ -162,6 +162,11 @@ export type Stmt = { span?: SourceSpan } & (
    *  otherwise-empty block is syntactically valid. Dropped at lowering (no IR
    *  node); an empty block re-emits `pass` on the way out. */
   | { t: "pass" }
+  /** Yield a value from a generator (`yield value`), or delegate to another
+   *  iterable (`yield from value`, `delegate` true). A bare `yield` has no value.
+   *  Unlike `return`, a yield SUSPENDS and resumes — control continues after it.
+   *  A function containing any yield is a generator (`function*` in TS). */
+  | { t: "yield"; value?: Expr; delegate?: boolean }
 );
 
 /**
