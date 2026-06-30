@@ -322,19 +322,26 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       return null; // branch arms are terminal
     }
     case "for": {
-      const id = newNode(ctx, { kind: "loop", label: s.varName }, undefined, s.span);
+      const carried = carriedVars(ctx, s.body, [s.varName]);
+      const id = newNode(ctx, { kind: "loop", label: s.varName, ...(carried.length ? { carried } : {}) }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.from), `${id}:from`, "data"]);
       ctx.wires.push([lowerExpr(ctx, s.to), `${id}:to`, "data"]);
       ctx.wires.push([prev, id, "control"]);
+      bindCarriedIn(ctx, id, carried);
       ctx.varMap.set(s.varName, `${id}:index`);
       lowerBlock(ctx, s.body, `${id}:body`);
+      bindCarriedOut(ctx, id, carried);
       return `${id}:done`;
     }
     case "while": {
-      const id = newNode(ctx, { kind: "while", label: "while" }, undefined, s.span);
+      const carried = carriedVars(ctx, s.body, []);
+      const id = newNode(ctx, { kind: "while", label: "while", ...(carried.length ? { carried } : {}) }, undefined, s.span);
+      // The condition reads the carried value, so bind carry_v BEFORE lowering it.
+      bindCarriedIn(ctx, id, carried);
       ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
       ctx.wires.push([prev, id, "control"]);
       lowerBlock(ctx, s.body, `${id}:body`);
+      bindCarriedOut(ctx, id, carried);
       return `${id}:done`;
     }
     case "foreach": {
@@ -345,13 +352,19 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // binds each name to its own out-port "0".."n-1" (like an `unpack` node), so
       // the iterated tuple is destructured per iteration; a single `varName` uses
       // the "item" port.
-      const node = s.names ? { kind: "foreach" as const, label: s.names.join(", "), names: s.names } : { kind: "foreach" as const, label: s.varName! };
+      const loopVars = s.names ?? [s.varName!];
+      const carried = carriedVars(ctx, s.body, loopVars);
+      const node = s.names
+        ? { kind: "foreach" as const, label: s.names.join(", "), names: s.names, ...(carried.length ? { carried } : {}) }
+        : { kind: "foreach" as const, label: s.varName!, ...(carried.length ? { carried } : {}) };
       const id = newNode(ctx, node, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.iter), `${id}:iter`, "data"]);
       ctx.wires.push([prev, id, "control"]);
+      bindCarriedIn(ctx, id, carried);
       if (s.names) s.names.forEach((n, i) => ctx.varMap.set(n, `${id}:${i}`));
       else ctx.varMap.set(s.varName!, `${id}:item`);
       lowerBlock(ctx, s.body, `${id}:body`);
+      bindCarriedOut(ctx, id, carried);
       return `${id}:done`;
     }
     case "try": {
@@ -480,6 +493,48 @@ function wireCallArgs(ctx: Ctx, e: Extract<Expr, { t: "call" }>, id: string): vo
   for (const arg of e.args) ctx.wires.push([lowerExpr(ctx, arg), id, "data"]);
   (e.starArgs ?? []).forEach((a, i) => ctx.wires.push([lowerExpr(ctx, a), `${id}:star${i}`, "data"]));
   (e.kwargs ?? []).forEach((k, i) => ctx.wires.push([lowerExpr(ctx, k.value), `${id}:kw${i}`, "data"]));
+}
+
+/**
+ * Loop-carried (accumulator) variables: names assigned in the loop body AND read
+ * upward-exposed there (so the body reads the PREVIOUS iteration's value, e.g.
+ * `total = total + x`), excluding the loop var(s) and any not bound before the
+ * loop. These become the loop node's iter-args (in_/carry_/next_/out_ pins).
+ */
+function carriedVars(ctx: Ctx, body: Stmt[], loopVars: string[]): string[] {
+  const exposed = upwardExposedReads(body);
+  // The update must be at the TOP LEVEL of the body, so the var's post-body binding
+  // (→ "next_v") reflects it. A var assigned only inside a branch/try is a
+  // CONDITIONAL accumulator whose update would be lost (→ a no-op `v = v`); those
+  // are refused in `walkForLoops`, not carried here.
+  const topAssigned = topLevelAssignedNames(body);
+  return [...topAssigned].filter((v) => exposed.has(v) && !loopVars.includes(v) && ctx.varMap.has(v));
+}
+
+/** Names assigned at the TOP LEVEL of a block (a `let`/`assign`/`destructure`/
+ *  `chain` directly in `stmts`, NOT inside a nested branch/loop/try). */
+function topLevelAssignedNames(stmts: Stmt[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of stmts) {
+    if (s.t === "let" || s.t === "assign") out.add(s.name);
+    if (s.t === "destructure" || s.t === "chain") for (const n of s.names) out.add(n);
+  }
+  return out;
+}
+
+/** Wire each carried var's pre-loop value into "in_v", then bind it to "carry_v"
+ *  (the body/condition reads the current iteration's value). Call BEFORE lowering
+ *  the body (and, for `while`, before lowering the condition). */
+function bindCarriedIn(ctx: Ctx, id: string, carried: string[]): void {
+  for (const v of carried) ctx.wires.push([ctx.varMap.get(v)!, `${id}:in_${v}`, "data"]);
+  for (const v of carried) ctx.varMap.set(v, `${id}:carry_${v}`);
+}
+
+/** Wire each carried var's post-body value into "next_v", then bind it to "out_v"
+ *  (reads after the loop see the final value). Call AFTER lowering the body. */
+function bindCarriedOut(ctx: Ctx, id: string, carried: string[]): void {
+  for (const v of carried) ctx.wires.push([ctx.varMap.get(v)!, `${id}:next_${v}`, "data"]);
+  for (const v of carried) ctx.varMap.set(v, `${id}:out_${v}`);
 }
 
 /** A call that is sequenced on the control wire: a method, a module link, or a stub. */
@@ -897,11 +952,22 @@ function walkForLoops(stmts: Stmt[], fnName: string): void {
       else if (s.t === "foreach") for (const n of s.names ?? [s.varName!]) assigned.delete(n);
       if (assigned.size > 0) {
         const exposed = upwardExposedReads(s.body);
+        const topAssigned = topLevelAssignedNames(s.body);
         const after = new Set<string>();
         blockReads(stmts.slice(i + 1), after);
         for (const name of assigned) {
-          if (exposed.has(name)) failCarried(fnName, name, "read across iterations");
-          if (after.has(name)) failCarried(fnName, name, "read after the loop");
+          // A var read upward-exposed AND assigned at the body's top level
+          // (`total = total + x`) is a loop-carried accumulator — represented as the
+          // loop node's iter-args (in_/carry_/next_/out_ pins), so it is SUPPORTED.
+          if (exposed.has(name) && topAssigned.has(name)) continue;
+          // Upward-exposed but updated ONLY inside a branch/try is a conditional
+          // accumulator: its update can't reach "next_v" (it would become a no-op
+          // `v = v`), so refuse rather than lift a lie.
+          if (exposed.has(name)) failCarried(fnName, name, "updated only inside a branch/try (a conditional accumulator has no IR node)");
+          // Carried OUT only: assigned in the body and read AFTER the loop, never
+          // read across iterations — its post-loop value would wire to an endpoint
+          // that only exists inside the loop, with no out-port. Refuse it.
+          if (after.has(name)) failCarried(fnName, name, "read after the loop (carried out, no IR node)");
         }
       }
     }

@@ -1400,6 +1400,43 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a foreach sum accumulator and round-trips", () => {
+    const { sys, py } = rt("def total(items: list) -> int:\n    acc = 0\n    for x in items:\n        acc = acc + x\n    return acc\n");
+    const fe = sys.modules["total"]!.interior.nodes.find((n) => n.kind === "foreach")!;
+    expect((fe as { carried?: string[] }).carried).toEqual(["acc"]);
+    expect(py).toContain("acc = 0");
+    expect(py).toContain("acc = (acc + x)");
+    expect(py).toContain("return acc");
+  });
+
+  it("lifts a string-concat accumulator and round-trips", () => {
+    const { py } = rt('def join(parts: list) -> str:\n    out = ""\n    for p in parts:\n        out = out + p\n    return out\n');
+    expect(py).toContain('out = ""');
+    expect(py).toContain("out = (out + p)");
+  });
+
+  it("lifts a while loop with two carried vars and round-trips", () => {
+    const { py } = rt("def countdown(n: int) -> int:\n    total = 0\n    while n > 0:\n        total = total + n\n        n = n - 1\n    return total\n");
+    expect(py).toContain("total = (total + n)");
+    expect(py).toContain("n = (n - 1)");
+    // The carried param `n` needs no redundant `n = n` init.
+    expect(py).not.toContain("n = n\n");
+  });
+
+  it("still refuses a carried-OUT-only var (read after loop, no accumulation)", () => {
+    expect(() => liftPython("def f(items: list) -> int:\n    last = 0\n    for x in items:\n        last = score(x)\n    return last\n")).toThrow(/carried out/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: async / await (item 23)", () => {
   it("lifts `async def` + `await` and round-trips (Python); TS emits async", () => {
     const src = "async def fetch_all(urls: list) -> int:\n    return process(await gather(urls))\n";
@@ -1820,10 +1857,10 @@ describe("lift: behavioral round-trip preserves observable behavior (TS)", () =>
 });
 
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
-  it("refuses a loop accumulator (carried IN) instead of flattening it to one iteration", () => {
-    // Regression: `total = total + i` reads `total` from the prior iteration. The
-    // single-assignment dataflow IR has no feedback edge, so lifting once used to
-    // silently collapse this to `0 + i`. It must be refused, not lifted to a lie.
+  it("lifts a loop accumulator (carried IN, item 19) as iter-args and round-trips", () => {
+    // `total = total + i` reads `total` from the prior iteration — a loop-carried
+    // accumulator, now the loop node's iter-args (in_/carry_/next_/out_ pins). The
+    // value is no longer silently flattened to `0 + i`; it round-trips.
     const src = [
       "export function sum(n: number): number {",
       "  let total = 0;",
@@ -1833,7 +1870,13 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
       "  return total;",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/carries variable "total" across loop/);
+    const sys = liftTypeScript(src);
+    const loop = sys.modules["sum"]!.interior.nodes.find((n) => n.kind === "loop")!;
+    expect((loop as { carried?: string[] }).carried).toEqual(["total"]);
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("let total = 0;");
+    expect(ts).toContain("total = (total + i);");
+    expect(transpile(liftTypeScript(ts), "ts")).toBe(ts); // fixed point
   });
 
   it("refuses a value carried OUT of a loop (read after the loop)", () => {

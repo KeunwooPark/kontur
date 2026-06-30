@@ -186,22 +186,24 @@ class ModuleCompiler {
       if (node.kind === "loop") {
         const v = identifier(node.label) || node.id;
         this.loopVar.set(node.id, v);
+        stmts.push(...this.carriedInit(node));
         stmts.push({
           t: "for",
           varName: v,
           from: this.resolveInput(node.id, "from"),
           to: this.resolveInput(node.id, "to"),
-          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+          body: [...this.flowFrom(this.controlTargetFrom(`${node.id}:body`)), ...this.carriedUpdate(node)],
         });
         cur = this.controlTargetFrom(`${node.id}:done`);
         continue;
       }
 
       if (node.kind === "while") {
+        stmts.push(...this.carriedInit(node));
         stmts.push({
           t: "while",
           cond: this.resolveInput(node.id, "cond"),
-          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+          body: [...this.flowFrom(this.controlTargetFrom(`${node.id}:body`)), ...this.carriedUpdate(node)],
         });
         cur = this.controlTargetFrom(`${node.id}:done`);
         continue;
@@ -213,11 +215,12 @@ class ModuleCompiler {
         // binds per-element out-ports "0".."n-1"; a single target binds "item".
         const v = identifier(node.label) || node.id;
         this.loopVar.set(node.id, v);
+        stmts.push(...this.carriedInit(node));
         stmts.push({
           t: "foreach",
           ...(node.names ? { names: node.names } : { varName: v }),
           iter: this.resolveInput(node.id, "iter"),
-          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+          body: [...this.flowFrom(this.controlTargetFrom(`${node.id}:body`)), ...this.carriedUpdate(node)],
         });
         cur = this.controlTargetFrom(`${node.id}:done`);
         continue;
@@ -475,6 +478,25 @@ class ModuleCompiler {
     return { t: "call", name: localName(node.ref), args };
   }
 
+  /** Loop-carried accumulator init, emitted BEFORE the loop: `v = <in_v source>`
+   *  (e.g. `total = 0`). A redundant `v = v` (the value already lives in `v`, e.g.
+   *  a carried param) is dropped — the binding is already in scope. */
+  private carriedInit(node: Extract<Node, { kind: "loop" | "while" | "foreach" }>): Stmt[] {
+    const out: Stmt[] = [];
+    for (const v of node.carried ?? []) {
+      const expr = this.resolveInput(node.id, `in_${v}`);
+      if (expr.t === "var" && expr.name === v) continue;
+      out.push({ t: "let", name: v, expr, mutable: true }); // reassigned in the loop
+    }
+    return out;
+  }
+
+  /** Loop-carried accumulator update, appended to the loop body: `v = <next_v
+   *  source>` (e.g. `total = (total + x)`). */
+  private carriedUpdate(node: Extract<Node, { kind: "loop" | "while" | "foreach" }>): Stmt[] {
+    return (node.carried ?? []).map((v) => ({ t: "assign", name: v, expr: this.resolveInput(node.id, `next_${v}`) }));
+  }
+
   /** A stub/method node's positional args: data wires into its BARE endpoint, in
    *  wire order (named pins — recv, star*, kw* — are excluded by the exact match). */
   private stubArgs(nodeId: string): Expr[] {
@@ -525,6 +547,12 @@ class ModuleCompiler {
     if (ep.kind === "boundary") return { t: "var", name: ep.port }; // a module in-port → param
 
     const src = this.node(ep.nodeId);
+    // A loop-carried accumulator's value, read in the body ("carry_v") or after the
+    // loop ("out_v"), is just the variable `v` — the loop node's iter-args carry it.
+    if ((src.kind === "loop" || src.kind === "foreach" || src.kind === "while") && ep.port !== undefined) {
+      if (ep.port.startsWith("carry_")) return { t: "var", name: ep.port.slice(6) };
+      if (ep.port.startsWith("out_")) return { t: "var", name: ep.port.slice(4) };
+    }
     if (src.kind === "loop" && ep.port === "index") {
       return { t: "var", name: this.loopVar.get(src.id) ?? src.id };
     }

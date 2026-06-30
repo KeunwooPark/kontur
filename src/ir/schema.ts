@@ -118,10 +118,11 @@ export const Node = z.discriminatedUnion("kind", [
   // positional args stay on the bare endpoint. Absent ⇒ a positional-only call.
   z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
-  z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string() }).strict(),
+  z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string(), carried: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
   // The counted `loop` carries from/to/index; a `while` carries only a predicate.
-  z.object({ ...nodeBase, kind: z.literal("while"), label: z.string() }).strict(),
+  // `carried` (loop-carried accumulators) work as on `foreach` — in_/carry_/next_/out_ pins.
+  z.object({ ...nodeBase, kind: z.literal("while"), label: z.string(), carried: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A collection-driven loop (for-each). Pins: data-in "iter" (the iterable);
   // data-out "item" (the bound element, read by the body); control-out "body" and
   // "done". The third loop sibling: `loop` counts a range, `while` tests a
@@ -129,7 +130,12 @@ export const Node = z.discriminatedUnion("kind", [
   // When the loop target is a tuple-unpack (`for k, v in items:`), `names` (≥2)
   // holds the per-element bindings and the bound elements come out on data-out
   // ports "0".."n-1" (each read by var name) instead of "item"; `label` is unused.
-  z.object({ ...nodeBase, kind: z.literal("foreach"), label: z.string(), names: z.array(z.string().min(1)).min(2).optional() }).strict(),
+  // `carried` names loop-carried (accumulator) variables: each `v` has data-in
+  // "in_v" (value before the loop), data-out "carry_v" (the current iteration's
+  // value, read by the body), data-in "next_v" (the body's updated value), and
+  // data-out "out_v" (the final value, read after the loop). The next→carry feedback
+  // across iterations is semantic (no literal cycle), like scf.for iter_args.
+  z.object({ ...nodeBase, kind: z.literal("foreach"), label: z.string(), names: z.array(z.string().min(1)).min(2).optional(), carried: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // Protected execution (try/catch). Control-in enters the protected block;
   // control-out "body" runs it, "catch" runs the handler if it raises, and "done"
   // is the continuation after either path. Data-out "error" is the caught value,
