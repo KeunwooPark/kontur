@@ -47,6 +47,9 @@ function expr(e: Expr): string {
     case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.then)} if ${expr(e.cond)} else ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
+    case "index": return `${expr(e.obj)}[${expr(e.key)}]`;
+    // A slice keeps each present bound around the `:`; an absent bound is an open end.
+    case "slice": return `${expr(e.obj)}[${e.start ? expr(e.start) : ""}:${e.stop ? expr(e.stop) : ""}]`;
     case "collection": {
       if (e.form === "dict") {
         const entries = e.entries ?? [];

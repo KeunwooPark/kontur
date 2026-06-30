@@ -59,6 +59,11 @@ function expr(e: Expr): string {
     case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.cond)} ? ${expr(e.then)} : ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
+    case "index": return `${expr(e.obj)}[${expr(e.key)}]`;
+    // TS has no slice syntax; cross-compile one-way to `.slice(start, stop)` (a
+    // Python-only construct — the TS lifter never produces it). An absent start
+    // defaults to 0; an absent stop omits the second arg (slice to the end).
+    case "slice": return `${expr(e.obj)}.slice(${e.start ? expr(e.start) : "0"}${e.stop ? `, ${expr(e.stop)}` : ""})`;
     case "collection": {
       // One-way cross-compile (these forms re-lift from Python, not TS): a tuple
       // becomes a plain array (TS has no distinct runtime tuple), a set a `new

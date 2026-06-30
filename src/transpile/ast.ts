@@ -44,6 +44,17 @@ export type Expr =
    *  `entries` the ordered key/value pairs for dict (mirroring `itercomp`'s
    *  elem-vs-key/value split). An empty literal carries an empty `elems`/`entries`. */
   | { t: "collection"; form: "tuple" | "set" | "dict"; elems?: Expr[]; entries?: { key: Expr; value: Expr }[] }
+  /** A subscript read `obj[key]`: index a list/dict/string by an arbitrary key
+   *  expression. The receiver `obj` may be any expression. Distinct from `member`
+   *  (a static field of a multi-output result, keyed by a constant STRING port
+   *  name); `index` is the general runtime subscript, emitted `obj[key]` in both
+   *  Python and TS — a symmetric, fixed-point construct in either language. */
+  | { t: "index"; obj: Expr; key: Expr }
+  /** A slice read `obj[start:stop]` — either bound may be absent (`obj[:3]`,
+   *  `obj[1:]`, `obj[:]`). Python renders it faithfully (a source fixed point);
+   *  TS has no slice syntax, so it cross-compiles ONE-WAY to `obj.slice(start,
+   *  stop)`. A step slice (`obj[::2]`) is refused at lift (deferred). */
+  | { t: "slice"; obj: Expr; start?: Expr; stop?: Expr }
   /**
    * A call to a generated function: a helper (stub) or another module. When
    * `external` is set the callee is an imported package symbol — its name is a

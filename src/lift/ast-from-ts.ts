@@ -379,6 +379,12 @@ function liftExpr(e: ts.Expression, sf: ts.SourceFile): Expr {
   if (ts.isArrayLiteralExpression(e)) {
     return { t: "array", elems: e.elements.map((el) => liftExpr(el, sf)) };
   }
+  // `obj[key]` — a subscript read. The inverse of the `index` emit; TS has the
+  // bracket form natively, so it round-trips symmetrically (unlike `slice`, which
+  // is Python-only and reaches TS only as a one-way `.slice` emit).
+  if (ts.isElementAccessExpression(e)) {
+    return { t: "index", obj: liftExpr(e.expression, sf), key: liftExpr(e.argumentExpression, sf) };
+  }
   if (ts.isCallExpression(e)) {
     const args = e.arguments.map((a) => liftExpr(a, sf));
     // `this.method(...)` is a method call on the ambient receiver — captured with

@@ -37,6 +37,8 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "collection", glyph: "⊞", label: "collection literal" },
   { kind: "comprehension", glyph: "∀", label: "comprehension" },
   { kind: "itercomp", glyph: "∋", label: "iterable comprehension" },
+  { kind: "index", glyph: "⊏", label: "index — subscript read" },
+  { kind: "slice", glyph: "⊆", label: "slice" },
   { kind: "module", glyph: "⧉", label: "module" },
   { kind: "state", glyph: "▣", label: "state — attribute" },
   { kind: "stateGet", glyph: "↥", label: "read attribute" },
@@ -131,6 +133,9 @@ export const paper: Theme = {
     collection: { fill: "#daf0f3", stroke: "#0a7d8c" },
     comprehension: { fill: "#daf0f3", stroke: "#0a7d8c" },
     itercomp: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    // subscript/slice read off a collection — share the collection teal.
+    index: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    slice: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // state family — one shared indigo hue so attributes + their accessors read
     // as a group, distinct from the flow kinds above.
     state: { fill: "#e6e7fb", stroke: "#4b4fc4" },
@@ -174,6 +179,8 @@ export const ink: Theme = {
     collection: { fill: "#10303a", stroke: "#2bb5c9" },
     comprehension: { fill: "#10303a", stroke: "#2bb5c9" },
     itercomp: { fill: "#10303a", stroke: "#2bb5c9" },
+    index: { fill: "#10303a", stroke: "#2bb5c9" },
+    slice: { fill: "#10303a", stroke: "#2bb5c9" },
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },
     stateGet: { fill: "#191b30", stroke: "#7c83e8" },
     stateSet: { fill: "#191b30", stroke: "#7c83e8" },

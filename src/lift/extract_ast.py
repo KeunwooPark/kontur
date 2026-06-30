@@ -67,8 +67,37 @@ def expr(e):
         return {"t": "var", "name": e.id}
     if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name) and e.value.id == "self":
         return {"t": "stateGet", "attr": e.attr}
-    if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name) and isinstance(e.slice, ast.Constant):
+    # A constant-STRING subscript on a bare name is a field of a multi-output
+    # result (`r["status"]`) — the `member` port accessor. Restricted to strings:
+    # the port names a multi-output module exposes are strings, and this is the
+    # round-trip inverse of how the transpiler emits one. Any other subscript
+    # (a non-string key, a variable key, a receiver that is not a bare name, or a
+    # slice) is a general runtime index/slice, handled just below.
+    if (
+        isinstance(e, ast.Subscript)
+        and isinstance(e.value, ast.Name)
+        and isinstance(e.slice, ast.Constant)
+        and isinstance(e.slice.value, str)
+    ):
         return {"t": "member", "name": e.value.id, "member": e.slice.value}
+    # A slice subscript `obj[start:stop]` -> a `slice` node (Python-faithful; TS
+    # cross-compiles one-way to `.slice`). Either bound may be absent (an open
+    # end). A step (`obj[::2]`) has no `.slice` form, so refuse it loudly (deferred).
+    if isinstance(e, ast.Subscript) and isinstance(e.slice, ast.Slice):
+        sl = e.slice
+        if sl.step is not None:
+            raise SystemExit("lift(py): unsupported slice step (`a[::2]`, deferred)")
+        out = {"t": "slice", "obj": expr(e.value)}
+        if sl.lower is not None:
+            out["start"] = expr(sl.lower)
+        if sl.upper is not None:
+            out["stop"] = expr(sl.upper)
+        return out
+    # A general subscript read `obj[key]` -> an `index` node: the indexed value on
+    # "obj", the key on "key". Covers a variable key (`a[i]`), a non-string const
+    # (`a[0]`), and a non-name receiver (`split(s)[0]`). Round-trips in both backends.
+    if isinstance(e, ast.Subscript):
+        return {"t": "index", "obj": expr(e.value), "key": expr(e.slice)}
     if isinstance(e, ast.BinOp) and type(e.op) in BINOP:
         return {"t": "bin", "op": BINOP[type(e.op)], "a": expr(e.left), "b": expr(e.right)}
     if isinstance(e, ast.Compare) and len(e.ops) == 1 and type(e.ops[0]) in CMP:
