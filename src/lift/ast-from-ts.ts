@@ -169,6 +169,22 @@ function elseBlock(stmt: ts.Statement | undefined, sf: ts.SourceFile): Stmt[] {
 function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
   if (ts.isVariableStatement(s)) {
     const decl = s.declarationList.declarations[0]!;
+    // `const [a, b] = value` — sequence unpacking, the inverse of the `destructure`
+    // emit. Only plain identifier elements are modelled; a hole (`[a, , b]`), a
+    // rest (`[a, ...rest]`), a default (`[a = 1]`), or a nested pattern is a
+    // distinct construct with no IR home, refused loudly rather than guessed.
+    if (ts.isArrayBindingPattern(decl.name)) {
+      const names: string[] = [];
+      for (const el of decl.name.elements) {
+        if (ts.isOmittedExpression(el)) throw new Error("lift(ts): unsupported hole in array destructuring (deferred)");
+        if (el.dotDotDotToken) throw new Error("lift(ts): unsupported rest element in array destructuring (`[a, ...rest]`, deferred)");
+        if (el.initializer) throw new Error("lift(ts): unsupported default in array destructuring (deferred)");
+        if (!ts.isIdentifier(el.name)) throw new Error("lift(ts): unsupported nested array destructuring (only plain names, deferred)");
+        names.push(el.name.text);
+      }
+      if (names.length < 2) throw new Error("lift(ts): unsupported single-element array destructuring (deferred)");
+      return { t: "destructure", names, value: liftExpr(decl.initializer!, sf) };
+    }
     return { t: "let", name: (decl.name as ts.Identifier).text, expr: liftExpr(decl.initializer!, sf) };
   }
   if (ts.isReturnStatement(s)) {

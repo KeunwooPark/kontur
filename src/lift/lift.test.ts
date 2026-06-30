@@ -1222,6 +1222,98 @@ describe("lift: subscript & attribute assignment round-trip from TypeScript (ite
   });
 });
 
+describe.skipIf(!hasPython())("lift: tuple unpacking assignment (item 14, Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("unpacks a call result `a, b = f(x)` into an `unpack` node and round-trips", () => {
+    // The requests `username, password = get_auth_from_url(url)` shape.
+    const { sys, py } = rt(
+      "def g(url: str) -> str:\n    a, b = get_auth_from_url(url)\n    return a\n",
+    );
+    expect(py).toContain("a, b = get_auth_from_url(url)");
+    expect(py).toContain("return a");
+    expect(nodeKinds(sys, "g")).toContain("unpack");
+  });
+
+  it("evaluates the unpacked value exactly ONCE (the call is not duplicated)", () => {
+    // Both names read through the single `unpack` node, so the call appears once —
+    // the whole reason unpack is a node, not N separate `value[i]` binds.
+    const { py } = rt(
+      "def g(url: str) -> str:\n    a, b = parse(url)\n    print(a)\n    print(b)\n    return a\n",
+    );
+    expect(py.match(/parse\(url\)/g)).toHaveLength(1);
+  });
+
+  it("unpacks a 7-name call result and round-trips (the requests parse_url shape)", () => {
+    const { py } = rt(
+      "def g(url: str) -> str:\n    scheme, auth, host, port, path, query, fragment = parse_url(url)\n    return host\n",
+    );
+    expect(py).toContain("scheme, auth, host, port, path, query, fragment = parse_url(url)");
+  });
+
+  it("unpacks a tuple literal `a, b = x, y` (the requests `None, None` shape)", () => {
+    // A literal RHS rides a `collection` tuple node; it re-emits parenthesised but
+    // is a fixed point thereafter.
+    const { sys, py } = rt(
+      "def g(x: int, y: int) -> int:\n    a, b = x, y\n    return a\n",
+    );
+    expect(py).toContain("a, b = (x, y)");
+    expect(nodeKinds(sys, "g")).toContain("unpack");
+    expect(nodeKinds(sys, "g")).toContain("collection");
+  });
+
+  it("unpacks a slice-of-call value and round-trips (the requests version-split shape)", () => {
+    const { py } = rt(
+      'def g(v: str) -> str:\n    major, minor, patch = v.split(".")[:3]\n    return major\n',
+    );
+    expect(py).toContain('major, minor, patch = v.split(".")[:3]');
+  });
+
+  it("cross-compiles tuple unpacking to a TS array destructuring", () => {
+    const sys = liftPython("def g(url: str) -> str:\n    a, b = parse(url)\n    return a\n");
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("const [a, b] = parse(url);");
+  });
+
+  it("refuses chained assignment `x = y = z` (deferred)", () => {
+    expect(() => liftPython("def g(z: int) -> int:\n    x = y = z\n    return x\n")).toThrow(/chained assignment/);
+  });
+
+  it("refuses a starred unpack target `a, *rest = xs` (deferred)", () => {
+    expect(() => liftPython("def g(xs: list) -> int:\n    a, *rest = xs\n    return a\n")).toThrow(/starred unpack/);
+  });
+
+  it("refuses a nested unpack target `(a, b), c = xs` (deferred)", () => {
+    expect(() => liftPython("def g(xs: list) -> int:\n    (a, b), c = xs\n    return c\n")).toThrow(/nested unpack/);
+  });
+});
+
+describe("lift: tuple unpacking round-trips from TypeScript (item 14)", () => {
+  it("lifts `const [a, b] = f(x)` to an `unpack` node and is a fixed point", () => {
+    const src = "export function g(x: number): number {\n  const [a, b] = parse(x);\n  return a;\n}\n";
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+    expect(codeA).toContain("const [a, b] = parse(x);");
+    expect(sys.modules["g"]!.interior.nodes.map((n) => n.kind)).toContain("unpack");
+  });
+
+  it("refuses a rest element `const [a, ...rest] = xs` (deferred)", () => {
+    expect(() =>
+      liftTypeScript("export function g(xs: number[]): number {\n  const [a, ...rest] = xs;\n  return a;\n}\n"),
+    ).toThrow(/rest element/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: Python for-each (collection loop)", () => {
   const SRC = "def print_all(items: list) -> None:\n    for item in items:\n        print(item)\n";
 

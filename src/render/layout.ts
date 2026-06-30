@@ -24,7 +24,7 @@ import { derivePins, portId, boundaryPortId, pinKey, type Pin } from "./ports.js
 export type NodeKind =
   | "function" | "method" | "branch" | "loop" | "while" | "foreach" | "try" | "throw" | "rethrow" | "effect" | "const" | "module"
   | "select" | "array" | "collection" | "comprehension" | "itercomp" | "index" | "slice"
-  | "state" | "stateGet" | "stateSet" | "attrGet" | "attrSet" | "indexSet"
+  | "state" | "stateGet" | "stateSet" | "attrGet" | "attrSet" | "indexSet" | "unpack"
   | "boundary";
 
 export interface LaidOutPort {
@@ -328,6 +328,9 @@ function nodeLabel(node: System["modules"][string]["interior"]["nodes"][number],
     case "try":
       // `label` holds the catch binding; surface it as `try (e)` for the reader.
       return node.label ? `try (${node.label})` : "try";
+    case "unpack":
+      // No `label`; the bound target names ARE the label.
+      return node.names.join(", ");
     default:
       return node.label;
   }

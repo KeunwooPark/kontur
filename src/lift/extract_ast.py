@@ -271,6 +271,27 @@ def _stmt(s):
         return {"t": "stateSet", "attr": s.targets[0].attr, "value": expr(s.value)}
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
         return {"t": "let", "name": s.targets[0].id, "expr": expr(s.value)}
+    # Chained assignment `x = y = z` binds several targets to one value. No IR node
+    # carries that broadcast yet (the unpack node below destructures one value into
+    # element-wise parts, not the whole value into several names), so refuse it.
+    if isinstance(s, ast.Assign) and len(s.targets) > 1:
+        raise SystemExit("lift(py): unsupported chained assignment (`x = y = z`, deferred)")
+    # Sequence unpacking `a, b = value` (a tuple/list target). Each name binds to
+    # the corresponding element of `value` -> a `destructure` (the `unpack` node).
+    # Only plain names are modelled: a starred target (`a, *rest = …`) or a nested
+    # one (`(a, b), c = …`) is a distinct construct with no IR home, refused loudly.
+    if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], (ast.Tuple, ast.List)):
+        elts = s.targets[0].elts
+        if len(elts) < 2:
+            raise SystemExit("lift(py): unsupported single-element unpack target (`(a,) = …`, deferred)")
+        names = []
+        for el in elts:
+            if isinstance(el, ast.Starred):
+                raise SystemExit("lift(py): unsupported starred unpack target (`a, *rest = …`, deferred)")
+            if not isinstance(el, ast.Name):
+                raise SystemExit("lift(py): unsupported nested unpack target (only plain names, deferred)")
+            names.append(el.id)
+        return {"t": "destructure", "names": names, "value": expr(s.value)}
     # An attribute-assignment target on an arbitrary receiver: `obj.attr = v` (the
     # `self.attr` case was taken above as stateSet). The write-side sibling of an
     # `attr` read — a control-sequenced effect with the receiver wired in.

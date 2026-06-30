@@ -83,6 +83,12 @@ export type Stmt = { span?: SourceSpan } & (
   /** Write an indexed element: `obj[key] = value` — the write-side counterpart of
    *  an `index` read. The general subscript-assignment lvalue. */
   | { t: "indexSet"; obj: Expr; key: Expr; value: Expr }
+  /** Sequence-unpacking assignment: `a, b, … = value`. Each name binds to the
+   *  corresponding element of `value` (a sequence); `value` is evaluated once.
+   *  Python renders it `a, b = value`, TS `const [a, b] = value`. At least two
+   *  names (a single target is a plain `let`); starred / nested targets are
+   *  refused at lift. */
+  | { t: "destructure"; names: string[]; value: Expr }
   | { t: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
   /** Inclusive counted loop: `for v in from..to`. */
   | { t: "for"; varName: string; from: Expr; to: Expr; body: Stmt[] }
