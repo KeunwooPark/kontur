@@ -56,7 +56,7 @@ def expr(e):
         return {"t": "member", "name": e.value.id, "member": e.slice.value}
     if isinstance(e, ast.BinOp) and type(e.op) in BINOP:
         return {"t": "bin", "op": BINOP[type(e.op)], "a": expr(e.left), "b": expr(e.right)}
-    if isinstance(e, ast.Compare) and len(e.ops) == 1:
+    if isinstance(e, ast.Compare) and len(e.ops) == 1 and type(e.ops[0]) in CMP:
         return {"t": "bin", "op": CMP[type(e.ops[0])], "a": expr(e.left), "b": expr(e.comparators[0])}
     if isinstance(e, ast.BoolOp):
         op = "and" if isinstance(e.op, ast.And) else "or"
@@ -231,7 +231,30 @@ def is_void(rt):
     return False
 
 
+def reject_unsupported_signature(f):
+    """Refuse signature features the IR cannot yet carry, rather than dropping
+    them silently. Today only plain positional params (with a type) survive; a
+    default value, *args/**kwargs, or keyword-/positional-only param would lift
+    to a lie. Refuse loudly until full signatures land (roadmap item 4)."""
+    a = f.args
+    if a.vararg:
+        raise SystemExit("lift(py): unsupported *args (not yet in the IR)")
+    if a.kwarg:
+        raise SystemExit("lift(py): unsupported **kwargs (not yet in the IR)")
+    if a.kwonlyargs:
+        # kw_defaults carries one slot per keyword-only arg (None when absent),
+        # so check kwonlyargs itself rather than that always-populated list.
+        raise SystemExit("lift(py): unsupported keyword-only parameter (not yet in the IR)")
+    if a.posonlyargs:
+        raise SystemExit("lift(py): unsupported positional-only parameter (not yet in the IR)")
+    if a.defaults:
+        raise SystemExit("lift(py): unsupported default parameter value (not yet in the IR)")
+
+
 def func(f, is_method=False):
+    if f.decorator_list:
+        raise SystemExit("lift(py): unsupported decorator (not yet in the IR)")
+    reject_unsupported_signature(f)
     args = f.args.args
     # A method's leading `self` is implicit in the IR; drop it.
     if is_method and args and args[0].arg == "self":
@@ -251,6 +274,13 @@ def func(f, is_method=False):
 
 
 def klass(c):
+    # Bases (inheritance) and class decorators are real system structure the IR
+    # does not yet carry; refuse them loudly instead of silently flattening the
+    # class to a bare one (roadmap items 5 & 6).
+    if c.bases or c.keywords:
+        raise SystemExit("lift(py): unsupported class base/inheritance (not yet in the IR)")
+    if c.decorator_list:
+        raise SystemExit("lift(py): unsupported class decorator (not yet in the IR)")
     fields = []
     methods = []
     doc, body = docstring_of(c.body)

@@ -228,6 +228,47 @@ describe.skipIf(!hasPython())("lift: package imports (Python)", () => {
   });
 });
 
+// Roadmap item 3: these constructs used to be silently dropped (extract_ast.py
+// never read decorator_list / bases / vararg / kwarg / defaults), so a file
+// lifted "successfully" but lost real structure. They now refuse loudly until
+// items 4-6 give them a faithful IR home.
+describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)", () => {
+  it("refuses a function decorator", () => {
+    const src = "@deco\ndef f() -> None:\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/decorator/);
+  });
+
+  it("refuses a default parameter value", () => {
+    const src = "def f(n: int = 1) -> None:\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/default/);
+  });
+
+  it("refuses *args", () => {
+    const src = "def f(*args) -> None:\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/args/);
+  });
+
+  it("refuses **kwargs", () => {
+    const src = "def f(**kwargs) -> None:\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/kwargs/);
+  });
+
+  it("refuses a keyword-only parameter", () => {
+    const src = "def f(*, n: int) -> None:\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/keyword-only/);
+  });
+
+  it("refuses class inheritance (base class)", () => {
+    const src = "class C(Base):\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/base|inheritance/);
+  });
+
+  it("refuses a class decorator", () => {
+    const src = "@deco\nclass C:\n    pass\n";
+    expect(() => liftPython(src)).toThrow(/decorator/);
+  });
+});
+
 describe("lift: classes (modules-as-methods + state-as-attributes)", () => {
   const SRC = [
     "export class Counter {",
