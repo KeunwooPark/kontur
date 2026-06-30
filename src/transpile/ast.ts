@@ -107,6 +107,15 @@ export interface Fn {
   /** When true, emit as a class method (no `export function`, `self`/`this`). */
   isMethod?: boolean;
   /**
+   * Decorators applied to the function/method, outermost first — each the
+   * decorator expression carried VERBATIM without its leading `@` (`property`,
+   * `app.route('/x')`, `functools.wraps(fn)`), like `Class.bases`: opaque
+   * metadata the IR passes across backends, not analysed. Emitted as `@<text>`
+   * lines above the definition. Absent ⇒ no decorator. The receiver-altering
+   * `@staticmethod` / `@classmethod` are refused at lift time, not carried here.
+   */
+  decorators?: string[];
+  /**
    * The captured docstring — a Python PEP 257 docstring or a TS JSDoc block. Held
    * as the human text only (no quotes/asterisks); each emitter re-wraps it in its
    * own syntax so it round-trips. Absent ⇒ the source carried no doc.
@@ -136,6 +145,9 @@ export interface Class {
    * inheritance — TS cannot express more than one). Absent ⇒ no base class.
    */
   bases?: string[];
+  /** Decorators applied to the class, outermost first — verbatim, sans `@`; see
+   *  `Fn.decorators`. Absent ⇒ no decorator. */
+  decorators?: string[];
   /** The captured class docstring (human text only); see `Fn.doc`. */
   doc?: string;
   /** Provenance back to the class definition (lifters only). */

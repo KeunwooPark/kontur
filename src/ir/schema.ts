@@ -207,6 +207,14 @@ export const Module = z
      * `extends`). Absent ⇒ no base class.
      */
     bases: z.array(z.string().min(1)).optional(),
+    /**
+     * Decorators applied to this module (a function, method, or class), outermost
+     * first. Each entry is the decorator expression carried VERBATIM without its
+     * leading `@` (`property`, `app.route('/x')`), like `bases`: opaque metadata
+     * the IR passes across backends without analysing, re-emitted as `@<text>`
+     * lines above the definition. Absent ⇒ no decorator.
+     */
+    decorators: z.array(z.string().min(1)).optional(),
     ports: z.array(Port),
     interior: Interior,
     /**

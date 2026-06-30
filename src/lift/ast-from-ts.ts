@@ -67,6 +67,15 @@ function docOf(node: ts.Node): string | undefined {
   return typeof comment === "string" ? comment : undefined;
 }
 
+/**
+ * Decorators on a class or member, outermost first, each the decorator
+ * expression carried VERBATIM without its leading `@` — the inverse of how
+ * `emit-ts` renders `decorators`. Opaque metadata, not analysed (cf. `bases`).
+ */
+function decoratorsOf(node: ts.HasDecorators, sf: ts.SourceFile): string[] {
+  return (ts.getDecorators(node) ?? []).map((d) => d.expression.getText(sf));
+}
+
 function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
   const fields: Field[] = [];
   const methods: Fn[] = [];
@@ -87,13 +96,14 @@ function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
     if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
       fields.push({ name: member.name.text, type: mapType(member.type) });
     } else if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.body) {
-      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true, docOf(member)));
+      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true, docOf(member), decoratorsOf(member, sf)));
     } else {
       throw new Error(`lift(ts): unsupported class member "${ts.SyntaxKind[member.kind]}"`);
     }
   }
   const doc = docOf(node);
-  return { name: node.name!.text, fields, methods, ...(bases.length ? { bases } : {}), ...(doc !== undefined ? { doc } : {}) };
+  const decorators = decoratorsOf(node, sf);
+  return { name: node.name!.text, fields, methods, ...(bases.length ? { bases } : {}), ...(decorators.length ? { decorators } : {}), ...(doc !== undefined ? { doc } : {}) };
 }
 
 function mapType(t: ts.TypeNode | undefined): string {
@@ -120,6 +130,7 @@ function liftCallable(
   sf: ts.SourceFile,
   isMethod: boolean,
   doc: string | undefined,
+  decorators: string[] = [],
 ): Fn {
   const params: Param[] = parameters.map((p) => {
     const param: Param = { name: (p.name as ts.Identifier).text, type: mapType(p.type) };
@@ -133,7 +144,7 @@ function liftCallable(
       ? []
       : [{ name: "result", type: mapType(type) }];
   const stmts = body.statements.map((s) => liftStmt(s, sf));
-  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}), ...(doc !== undefined ? { doc } : {}) };
+  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}), ...(decorators.length ? { decorators } : {}), ...(doc !== undefined ? { doc } : {}) };
 }
 
 /** A parameter default, restricted to the forms the IR carries (a literal or a

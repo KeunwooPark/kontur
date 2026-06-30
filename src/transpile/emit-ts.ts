@@ -163,6 +163,8 @@ function fn(f: Fn, indent = ""): string {
     ? `${indent}${camel(f.name)}(${params}): ${returnType(f)} {`
     : `${indent}export function ${camel(f.name)}(${params}): ${returnType(f)} {`;
   const lines = f.doc !== undefined ? jsDoc(f.doc, indent) : [];
+  // Decorators follow the doc block, each on its own `@<text>` line.
+  for (const d of f.decorators ?? []) lines.push(`${indent}@${d}`);
   lines.push(head);
   for (const s of f.body) lines.push(...stmt(s, indent + "  "));
   lines.push(`${indent}}`);
@@ -175,6 +177,7 @@ function cls(c: Class): string {
   // `extends`. A class lifted from TS carries at most one base; a Python class with
   // several has no faithful TS form, so they are joined after `extends` as-is.
   const heritage = c.bases && c.bases.length ? ` extends ${c.bases.join(", ")}` : "";
+  for (const d of c.decorators ?? []) lines.push(`@${d}`);
   lines.push(`export class ${pascal(c.name)}${heritage} {`);
   for (const f of c.fields) lines.push(`  ${camel(f.name)}: ${tsType(f.type)};`);
   for (const m of c.methods) {

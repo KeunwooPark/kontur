@@ -277,13 +277,30 @@ def params_of(f, is_method):
     return params
 
 
+def decorators_of(node):
+    """Decorators captured VERBATIM, outermost first, each as the decorator
+    expression sans `@` (`property`, `app.route('/x')`) — opaque metadata the IR
+    re-emits, not analysed (cf. base classes). `@staticmethod` / `@classmethod`
+    are REFUSED: they drop/rename the implicit receiver, so they change the
+    parameter contract rather than just decorate it — a separate concern from
+    metadata capture, deferred. Reconstructed via `ast.unparse`, which is
+    idempotent on its own output, so the round-trip is a fixed point."""
+    out = []
+    for d in node.decorator_list:
+        if isinstance(d, ast.Name) and d.id in ("staticmethod", "classmethod"):
+            raise SystemExit("lift(py): unsupported @" + d.id + " (alters the implicit receiver; not yet modelled)")
+        out.append(ast.unparse(d))
+    return out
+
+
 def func(f, is_method=False):
-    if f.decorator_list:
-        raise SystemExit("lift(py): unsupported decorator (not yet in the IR)")
+    decorators = decorators_of(f)
     params = params_of(f, is_method)
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
     doc, body = docstring_of(f.body)
     out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in body]}
+    if decorators:
+        out["decorators"] = decorators
     if doc is not None:
         out["doc"] = doc
     if is_method:
@@ -309,13 +326,12 @@ def dotted_name(node):
 def klass(c):
     # Positional base classes ARE captured now (roadmap item 5): each is a name or
     # dotted name re-emitted verbatim, like any other type identifier (cf. throw's
-    # `errorType`). Keyword bases (e.g. `metaclass=`) and class decorators are real
-    # structure the IR does not yet carry; refuse them loudly (decorators are
-    # roadmap item 6) instead of silently flattening the class.
+    # `errorType`). Class decorators are captured the same way (roadmap item 6).
+    # Keyword bases (e.g. `metaclass=`) are real structure the IR does not yet
+    # carry; refuse them loudly instead of silently flattening the class.
     if c.keywords:
         raise SystemExit("lift(py): unsupported class keyword base (e.g. metaclass=, not yet in the IR)")
-    if c.decorator_list:
-        raise SystemExit("lift(py): unsupported class decorator (not yet in the IR)")
+    decorators = decorators_of(c)
     bases = []
     for b in c.bases:
         name = dotted_name(b)
@@ -337,6 +353,8 @@ def klass(c):
     out = {"name": c.name, "fields": fields, "methods": methods}
     if bases:
         out["bases"] = bases
+    if decorators:
+        out["decorators"] = decorators
     if doc is not None:
         out["doc"] = doc
     sp = span(c)

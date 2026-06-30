@@ -170,7 +170,9 @@ function fn(f: Fn, indent = ""): string {
     f.returns.length === 0 ? "None"
     : f.returns.length === 1 ? pyType(f.returns[0]!.type)
     : "dict";
-  const lines = [`${indent}def ${snake(f.name)}(${params}) -> ${ret}:`];
+  // Decorators sit on their own `@<text>` lines above the def, outermost first.
+  const lines = (f.decorators ?? []).map((d) => `${indent}@${d}`);
+  lines.push(`${indent}def ${snake(f.name)}(${params}) -> ${ret}:`);
   const body: string[] = [];
   // The docstring is the first body statement (PEP 257). A doc-only body is a
   // complete Python body, so it needs no `pass` filler.
@@ -185,7 +187,8 @@ function cls(c: Class): string {
   // Bases are type identifiers, emitted verbatim (not re-cased) — Python allows
   // several, joined as positional bases: `class C(A, B):`.
   const bases = c.bases && c.bases.length ? `(${c.bases.join(", ")})` : "";
-  const lines = [`class ${pascal(c.name)}${bases}:`];
+  const lines = (c.decorators ?? []).map((d) => `@${d}`);
+  lines.push(`class ${pascal(c.name)}${bases}:`);
   if (c.doc !== undefined) lines.push(`    ${pyDocLiteral(c.doc)}`);
   for (const field of c.fields) lines.push(`    ${snake(field.name)}: ${pyType(field.type)}`);
   for (const m of c.methods) {
