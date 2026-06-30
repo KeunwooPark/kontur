@@ -275,7 +275,10 @@ def klass(c):
 def imports_of(tree):
     """Collect import statements verbatim so the transpiler can reproduce them.
     `import a, b` and `from m import a, b` each yield one Import per module
-    specifier. Relative and star imports have no faithful model — refuse loudly."""
+    specifier. A relative import (`from .x import y`) keeps its leading dots in the
+    `source` specifier, so it round-trips verbatim and the multi-file driver can
+    resolve the dots against the package path into a cross-file link. Only star
+    imports stay refused — they bind names we cannot see."""
     out = []
     for n in tree.body:
         sp = span(n)
@@ -288,12 +291,14 @@ def imports_of(tree):
                     d["span"] = sp
                 out.append(d)
         elif isinstance(n, ast.ImportFrom):
-            if n.level != 0:
-                raise SystemExit("lift(py): unsupported relative import (no IR model for package-relative specifiers)")
             if any(a.name == "*" for a in n.names):
                 raise SystemExit("lift(py): unsupported star import (`from m import *` binds names we cannot see)")
+            # Reconstruct the literal specifier: `level` leading dots, then the
+            # (possibly empty) dotted module. `from . import x` → ".";
+            # `from .x import y` → ".x"; `from ..a.b import z` → "..a.b".
+            source = "." * n.level + (n.module or "")
             bindings = [{"kind": "named", "imported": a.name, "local": a.asname or a.name} for a in n.names]
-            d = {"source": n.module, "bindings": bindings}
+            d = {"source": source, "bindings": bindings}
             if sp is not None:
                 d["span"] = sp
             out.append(d)

@@ -260,3 +260,37 @@ describe.skipIf(!hasPython())("liftProject: Python sibling imports", () => {
     expect(out.get("util.py")).toContain("def double(x: int) -> int:");
   });
 });
+
+describe.skipIf(!hasPython())("liftProject: Python package-relative imports", () => {
+  // A real package wires its files with `from .x import y` / `from ..x import y`.
+  // The dots resolve against the package path: one dot is the importer's own
+  // directory, a second climbs to the parent package.
+  const FILES = {
+    "pkg/auth.py": "def make_token(n: int) -> int:\n    return (n + 1)\n",
+    "pkg/sub/api.py": [
+      "from ..auth import make_token",
+      "",
+      "",
+      "def login(n: int) -> int:",
+      "    t = make_token(n)",
+      "    return t",
+      "",
+    ].join("\n"),
+  };
+
+  it("resolves `from ..auth import make_token` to a cross-file link and round-trips", () => {
+    const root = writeProject(FILES);
+    const sys = liftProject({ root, entries: [join(root, "pkg/sub/api.py")] });
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(Object.keys(sys.modules).sort()).toEqual(["pkg/auth#make_token", "pkg/sub/api#login"]);
+
+    const link = sys.modules["pkg/sub/api#login"]!.interior.nodes.find(
+      (n): n is Extract<Node, { kind: "module" }> => n.kind === "module",
+    );
+    expect(link?.ref).toBe("pkg/auth#make_token");
+
+    const out = transpileProject(sys, "python");
+    expect(out.get("pkg/sub/api.py")).toContain("from ..auth import make_token");
+    expect(out.get("pkg/sub/api.py")).toContain("t = make_token(n)");
+  });
+});

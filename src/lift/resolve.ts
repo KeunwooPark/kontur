@@ -43,14 +43,21 @@ function resolveTs(specifier: string, importerAbs: string): string | undefined {
 /**
  * Python resolution (v1): map the dotted specifier to a path relative to the
  * importing file's directory — `from util import x` → `util.py`, `from a.b
- * import x` → `a/b.py` (or its package `__init__.py`). This covers flat layouts
- * and a package lifted from its own root; resolving against an arbitrary
- * `sys.path` is out of scope. Relative (`from . import x`) specifiers are
- * rejected upstream by the extractor and never reach here.
+ * import x` → `a/b.py` (or its package `__init__.py`). A package-relative
+ * specifier carries leading dots: one dot is the importer's own package
+ * directory, each extra dot climbs one parent — `from .auth import x` →
+ * `auth.py` beside the importer, `from ..models import y` → `models.py` one
+ * directory up. This covers flat layouts and a package lifted from its own root;
+ * resolving against an arbitrary `sys.path` is out of scope.
  */
 function resolvePy(specifier: string, importerAbs: string): string | undefined {
-  const parts = specifier.split(".");
-  const base = resolvePath(dirname(importerAbs), ...parts);
+  const [, dots = "", rest = ""] = specifier.match(/^(\.*)(.*)$/)!;
+  // `level` leading dots: level 1 stays in the importer's package dir, so only
+  // the dots beyond the first climb a parent. The remaining dotted name (if any)
+  // then descends as path segments.
+  const climb = dots.length > 0 ? Array(dots.length - 1).fill("..") : [];
+  const parts = rest ? rest.split(".") : [];
+  const base = resolvePath(dirname(importerAbs), ...climb, ...parts);
   const candidates = [`${base}.py`, resolvePath(base, "__init__.py")];
   return candidates.find((c) => existsSync(c));
 }
