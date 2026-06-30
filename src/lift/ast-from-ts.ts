@@ -70,6 +70,19 @@ function docOf(node: ts.Node): string | undefined {
 function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
   const fields: Field[] = [];
   const methods: Fn[] = [];
+  // `extends` clauses become bases (verbatim type identifiers). `implements` and
+  // type arguments on a base have no IR home, so refuse them loudly rather than
+  // drop them silently.
+  const bases: string[] = [];
+  for (const clause of node.heritageClauses ?? []) {
+    if (clause.token === ts.SyntaxKind.ImplementsKeyword) {
+      throw new Error("lift(ts): unsupported `implements` clause (not yet in the IR)");
+    }
+    for (const t of clause.types) {
+      if (t.typeArguments) throw new Error("lift(ts): unsupported type arguments on a base class");
+      bases.push(t.expression.getText(sf));
+    }
+  }
   for (const member of node.members) {
     if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
       fields.push({ name: member.name.text, type: mapType(member.type) });
@@ -80,7 +93,7 @@ function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
     }
   }
   const doc = docOf(node);
-  return { name: node.name!.text, fields, methods, ...(doc !== undefined ? { doc } : {}) };
+  return { name: node.name!.text, fields, methods, ...(bases.length ? { bases } : {}), ...(doc !== undefined ? { doc } : {}) };
 }
 
 function mapType(t: ts.TypeNode | undefined): string {

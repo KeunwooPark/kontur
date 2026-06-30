@@ -198,6 +198,15 @@ export const Module = z
      * "function".
      */
     kind: z.enum(["function", "class"]).optional(),
+    /**
+     * Base classes (inheritance) — meaningful only on a `class` module. Each entry
+     * is a name or dotted name (`RequestException`, `collections.abc.MutableMapping`)
+     * carried VERBATIM, like the `throw` node's `errorType`: a type identifier the
+     * IR passes across backends without re-casing or resolving to a link. Declared
+     * order is preserved (Python allows several bases; TS emits the first via
+     * `extends`). Absent ⇒ no base class.
+     */
+    bases: z.array(z.string().min(1)).optional(),
     ports: z.array(Port),
     interior: Interior,
     /**

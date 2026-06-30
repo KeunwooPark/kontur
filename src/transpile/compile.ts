@@ -87,7 +87,7 @@ function compileClass(
       fn.isMethod = true;
       return fn;
     });
-  return { name: id, fields, methods, ...(mod.doc !== undefined ? { doc: mod.doc } : {}) };
+  return { name: id, fields, methods, ...(mod.bases && mod.bases.length ? { bases: mod.bases } : {}), ...(mod.doc !== undefined ? { doc: mod.doc } : {}) };
 }
 
 class ModuleCompiler {

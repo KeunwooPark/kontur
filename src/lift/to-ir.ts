@@ -162,6 +162,7 @@ function lowerClass(
   modules[classId] = {
     title: cls.name,
     kind: "class",
+    ...(cls.bases && cls.bases.length ? { bases: cls.bases } : {}),
     ports: [],
     interior: { nodes, wires: [] },
     ...(cls.doc !== undefined ? { doc: cls.doc } : {}),
