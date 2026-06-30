@@ -1079,3 +1079,134 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(() => liftTypeScript(src)).toThrow(/early\/branch return/);
   });
 });
+
+// Roadmap item 7: method/attribute access on self & locals. Today only
+// imported-base member calls lifted; real OO needs `self.foo()`, `obj.bar()`,
+// and general attribute reads `obj.attr`. A method call becomes a `method` node
+// (receiver wired on pin "recv", or AMBIENT — no wire — when the receiver is
+// self/this); an attribute read becomes an `attrGet` node. Bare `self`/`this`
+// values and reads off an imported name stay refused (deferred constructs).
+describe.skipIf(!hasPython())("lift: method & attribute access on self/locals (Python)", () => {
+  const roundtrips = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA); // fixed point
+    return { sys, codeA };
+  };
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("a self method call is a `method` node with no receiver wire", () => {
+    const { sys, codeA } = roundtrips(
+      "class C:\n    def greet(self, x: str) -> str:\n        msg = self.fmt(x)\n        return msg\n\n    def fmt(self, x: str) -> str:\n        return x\n",
+    );
+    expect(codeA).toContain("msg = self.fmt(x)");
+    const greet = sys.modules["C.greet"]!;
+    const method = greet.interior.nodes.find((n) => n.kind === "method");
+    expect(method).toBeDefined();
+    expect((method as { label: string }).label).toBe("fmt");
+    // The ambient self receiver carries NO `:recv` wire — only the arg `x`.
+    const recvWire = greet.interior.wires.find(([, to]) => to === `${method!.id}:recv`);
+    expect(recvWire).toBeUndefined();
+  });
+
+  it("a method call on a local wires the receiver on pin `recv`", () => {
+    const { sys, codeA } = roundtrips(
+      "def f(target: str) -> str:\n    out = target.upper()\n    return out\n",
+    );
+    expect(codeA).toContain("out = target.upper()");
+    const method = sys.modules["f"]!.interior.nodes.find((n) => n.kind === "method")!;
+    const recvWire = sys.modules["f"]!.interior.wires.find(([, to]) => to === `${method.id}:recv`);
+    expect(recvWire).toBeDefined();
+  });
+
+  it("round-trips a chained method call", () => {
+    const { codeA } = roundtrips("def f(s: str) -> str:\n    return s.strip().lower()\n");
+    expect(codeA).toContain("return s.strip().lower()");
+  });
+
+  it("a general attribute read is an `attrGet` node and round-trips", () => {
+    const { sys, codeA } = roundtrips("def f(resp: str) -> str:\n    return resp.status\n");
+    expect(codeA).toContain("return resp.status");
+    expect(nodeKinds(sys, "f")).toContain("attrGet");
+  });
+
+  it("round-trips a method call on a self attribute (stateGet receiver)", () => {
+    const { codeA } = roundtrips(
+      "class C:\n    def f(self, url: str) -> str:\n        r = self.session.get(url)\n        return r\n",
+    );
+    expect(codeA).toContain("r = self.session.get(url)");
+  });
+
+  it("round-trips an effectful method-call statement", () => {
+    const { codeA } = roundtrips("def f(items: str) -> None:\n    items.append(1)\n");
+    expect(codeA).toContain("items.append(1)");
+  });
+
+  it("round-trips a method call in argument position", () => {
+    const { codeA } = roundtrips("def f(obj: str) -> str:\n    return helper(obj.name())\n");
+    expect(codeA).toContain("return helper(obj.name())");
+  });
+
+  it("refuses a bare `self` value (no IR source yet)", () => {
+    const src = "class C:\n    def f(self) -> None:\n        sink(self)\n";
+    expect(() => transpile(liftPython(src), "python")).toThrow(/bare "self"\/"this"/);
+  });
+
+  it("refuses an attribute read on an imported name (package value reference)", () => {
+    const src = "import sys\ndef f() -> int:\n    return sys.maxsize\n";
+    expect(() => liftPython(src)).toThrow();
+  });
+
+  it("refuses a bare `return` (early exit, not yet modelled)", () => {
+    const src = "def f(x: int) -> None:\n    if (x > 0):\n        return\n    print(x)\n";
+    expect(() => liftPython(src)).toThrow();
+  });
+});
+
+describe("lift: method & attribute access on self/locals (TS)", () => {
+  const roundtrips = (src: string) => {
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+    return { sys, codeA };
+  };
+
+  it("a `this` method call is a `method` node with no receiver wire", () => {
+    const { sys, codeA } = roundtrips(
+      "export class C {\n  greet(x: string): string {\n    return this.fmt(x);\n  }\n\n  fmt(x: string): string {\n    return x;\n  }\n}\n",
+    );
+    expect(codeA).toContain("return this.fmt(x);");
+    const greet = sys.modules["C.greet"]!;
+    const method = greet.interior.nodes.find((n) => n.kind === "method")!;
+    expect((method as { label: string }).label).toBe("fmt");
+    expect(greet.interior.wires.find(([, to]) => to === `${method.id}:recv`)).toBeUndefined();
+  });
+
+  it("classifies a method call on a bound local and wires the receiver", () => {
+    const { sys, codeA } = roundtrips(
+      "export function f(obj: string): string {\n  const x = obj.toUpperCase();\n  return x;\n}\n",
+    );
+    expect(codeA).toContain("const x = obj.toUpperCase();");
+    const method = sys.modules["f"]!.interior.nodes.find((n) => n.kind === "method")!;
+    expect(sys.modules["f"]!.interior.wires.find(([, to]) => to === `${method.id}:recv`)).toBeDefined();
+  });
+
+  it("round-trips a general attribute read", () => {
+    const { sys, codeA } = roundtrips("export function f(resp: string): string {\n  return resp.status;\n}\n");
+    expect(codeA).toContain("return resp.status;");
+    expect(sys.modules["f"]!.interior.nodes.map((n) => n.kind)).toContain("attrGet");
+  });
+
+  it("round-trips a chained method call", () => {
+    const { codeA } = roundtrips("export function f(s: string): string {\n  return s.trim().toLowerCase();\n}\n");
+    expect(codeA).toContain("return s.trim().toLowerCase();");
+  });
+
+  it("refuses a bare `this` value (no IR source yet)", () => {
+    const src = "export class C {\n  f(): void {\n    sink(this);\n  }\n}\n";
+    expect(() => transpile(liftTypeScript(src), "ts")).toThrow(/bare "self"\/"this"/);
+  });
+});

@@ -11,8 +11,17 @@ export type { SourceSpan };
 export type Expr =
   | { t: "lit"; value: unknown }
   | { t: "var"; name: string }
+  /** The ambient method receiver: `self` (Python) / `this` (TS). Only ever the
+   *  receiver of a method call or the base of an attribute read — never a value
+   *  on its own (a bare `self` is refused at lift time). */
+  | { t: "self" }
   /** Member access on a multi-output module-call result: `name.member`. */
   | { t: "member"; name: string; member: string }
+  /** A general attribute read on a receiver: `obj.name` (the receiver may itself
+   *  be any expression — a var, a call result, a nested attr). Distinct from
+   *  `member` (a dict/record field of a multi-output result) and from `stateGet`
+   *  (the enclosing class's own `self.attr`). */
+  | { t: "attr"; obj: Expr; name: string }
   /** Read an attribute of the enclosing class: `this.attr` / `self.attr`. */
   | { t: "stateGet"; attr: string }
   | { t: "bin"; op: Op; a: Expr; b: Expr }
@@ -27,9 +36,11 @@ export type Expr =
    * A call to a generated function: a helper (stub) or another module. When
    * `external` is set the callee is an imported package symbol — its name is a
    * library API identifier, so it is emitted VERBATIM (no camel/snake re-casing,
-   * dotted member access preserved).
+   * dotted member access preserved). When `recv` is set this is a METHOD call —
+   * `recv.name(args)` — and `name` is the method name (emitted verbatim, like an
+   * attribute); a `self`/`this` receiver round-trips as the `self` expr.
    */
-  | { t: "call"; name: string; args: Expr[]; external?: boolean };
+  | { t: "call"; name: string; args: Expr[]; recv?: Expr; external?: boolean };
 
 // `span` is the optional provenance back to source (set by the lifters, ignored
 // by the emitters). Intersected over the union so every statement kind carries it

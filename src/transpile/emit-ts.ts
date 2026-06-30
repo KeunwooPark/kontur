@@ -33,7 +33,11 @@ function expr(e: Expr): string {
   switch (e.t) {
     case "lit": return lit(e.value);
     case "var": return camel(e.name);
+    case "self": return "this";
     case "member": return `${camel(e.name)}.${e.member}`;
+    // A general attribute read keeps the attribute name verbatim (external API
+    // surface), recursing into the receiver.
+    case "attr": return `${expr(e.obj)}.${e.name}`;
     case "stateGet": return `this.${camel(e.attr)}`;
     case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
     case "un": return `(!${expr(e.x)})`;
@@ -45,9 +49,14 @@ function expr(e: Expr): string {
       const v = camel(e.varName);
       return `Array.from({ length: ${expr(e.to)} - ${expr(e.from)} + 1 }, (_, ${v}) => ${expr(e.elem)})`;
     }
-    // A package call keeps its library API name verbatim (no re-casing, dotted
+    // A method call renders `recv.method(args)` with the method name verbatim; a
+    // package call keeps its library API name verbatim (no re-casing, dotted
     // member access preserved); a local helper/stub is cased like any identifier.
-    case "call": return `${e.external ? e.name : camel(e.name)}(${e.args.map(expr).join(", ")})`;
+    case "call": {
+      const args = e.args.map(expr).join(", ");
+      if (e.recv) return `${expr(e.recv)}.${e.name}(${args})`;
+      return `${e.external ? e.name : camel(e.name)}(${args})`;
+    }
   }
 }
 

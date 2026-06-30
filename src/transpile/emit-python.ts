@@ -30,7 +30,11 @@ function expr(e: Expr): string {
   switch (e.t) {
     case "lit": return lit(e.value);
     case "var": return snake(e.name);
+    case "self": return "self";
     case "member": return `${snake(e.name)}["${e.member}"]`;
+    // A general attribute read keeps the attribute name verbatim (external API
+    // surface, like a package member), recursing into the receiver.
+    case "attr": return `${expr(e.obj)}.${e.name}`;
     case "stateGet": return `self.${snake(e.attr)}`;
     case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
     case "un": return `(not ${expr(e.x)})`;
@@ -41,8 +45,13 @@ function expr(e: Expr): string {
       const v = snake(e.varName);
       return `[${expr(e.elem)} for ${v} in range(${expr(e.from)}, ${expr(e.to)} + 1)]`;
     }
-    // A package call keeps its library API name verbatim; a local stub is cased.
-    case "call": return `${e.external ? e.name : snake(e.name)}(${e.args.map(expr).join(", ")})`;
+    // A method call renders `recv.method(args)` with the method name verbatim; a
+    // package call keeps its library API name verbatim; a local stub is cased.
+    case "call": {
+      const args = e.args.map(expr).join(", ");
+      if (e.recv) return `${expr(e.recv)}.${e.name}(${args})`;
+      return `${e.external ? e.name : snake(e.name)}(${args})`;
+    }
   }
 }
 
