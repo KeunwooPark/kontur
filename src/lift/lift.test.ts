@@ -801,9 +801,13 @@ describe.skipIf(!hasPython())("lift: augmented assignment desugars to assign(bin
     expect(() => liftPython(src)).toThrow(/augmented-assignment operator/);
   });
 
-  it("refuses a subscript lvalue target (`d[k] += v` needs item 13)", () => {
+  it("now lifts a subscript lvalue target (`d[k] += v` — item 13 added the lvalue model)", () => {
     const src = ["def f(d: dict, k: int) -> None:", "    d[k] += 1", "    print(d)", ""].join("\n");
-    expect(() => liftPython(src)).toThrow(/augmented-assignment target/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain("d[k] = (d[k] + 1)");
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA);
   });
 });
 
@@ -1130,6 +1134,91 @@ describe("lift: subscript round-trips from TypeScript (item 12, slice C)", () =>
     expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
     expect(codeA).toContain("return a[i];");
     expect(sys.modules["f"]!.interior.nodes.map((n) => n.kind)).toContain("index");
+  });
+});
+
+describe.skipIf(!hasPython())("lift: subscript & attribute assignment targets (item 13, Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const nodeKinds = (sys: System, modId: string) =>
+    sys.modules[modId]!.interior.nodes.map((n) => n.kind);
+
+  it("lifts a member-assignment target `obj.attr = v` to an `attrSet` node and round-trips", () => {
+    const { sys, py } = rt("def f(obj: object, v: int) -> None:\n    obj.attr = v\n");
+    expect(py).toContain("obj.attr = v");
+    expect(nodeKinds(sys, "f")).toContain("attrSet");
+  });
+
+  it("lifts a nested-receiver member assignment `obj.inner.attr = v` and round-trips", () => {
+    const { py } = rt("def f(obj: object, v: int) -> None:\n    obj.inner.attr = v\n");
+    expect(py).toContain("obj.inner.attr = v");
+  });
+
+  it("lifts a subscript-assignment target `d[k] = v` to an `indexSet` node and round-trips", () => {
+    const { sys, py } = rt("def f(d: dict, k: str, v: int) -> None:\n    d[k] = v\n");
+    expect(py).toContain("d[k] = v");
+    expect(nodeKinds(sys, "f")).toContain("indexSet");
+  });
+
+  it("lifts a constant-string subscript write `d[\"x\"] = v` to `indexSet` (not a member)", () => {
+    const { sys, py } = rt('def f(d: dict, v: int) -> None:\n    d["x"] = v\n');
+    expect(py).toContain('d["x"] = v');
+    expect(nodeKinds(sys, "f")).toContain("indexSet");
+  });
+
+  it("lifts an augmented subscript target `d[k] += v` (desugars, source fixed point)", () => {
+    const { sys, py } = rt("def f(d: dict, k: str, v: int) -> None:\n    d[k] += v\n");
+    expect(py).toContain("d[k] = (d[k] + v)");
+    expect(nodeKinds(sys, "f")).toContain("indexSet");
+  });
+
+  it("lifts an augmented member target `obj.attr += v` (desugars, source fixed point)", () => {
+    const { sys, py } = rt("def f(obj: object, v: int) -> None:\n    obj.attr += v\n");
+    expect(py).toContain("obj.attr = (obj.attr + v)");
+    expect(nodeKinds(sys, "f")).toContain("attrSet");
+  });
+
+  it("cross-compiles a member/subscript assignment to TS", () => {
+    const sys = liftPython("def f(obj: object, d: dict, k: str, v: int) -> None:\n    obj.attr = v\n    d[k] = v\n");
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("obj.attr = v;");
+    expect(ts).toContain("d[k] = v;");
+  });
+
+  it("refuses a slice-assignment target `d[1:3] = v` (deferred)", () => {
+    expect(() => liftPython("def f(d: list, v: list) -> None:\n    d[1:3] = v\n")).toThrow(/slice-assignment/);
+  });
+});
+
+describe("lift: subscript & attribute assignment round-trip from TypeScript (item 13)", () => {
+  const rt = (src: string) => {
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+    return { sys, ts: codeA };
+  };
+
+  it("lifts a TS member assignment `obj.attr = v;` to `attrSet` and is a fixed point", () => {
+    const { sys, ts } = rt("export function f(obj: Box, v: number): void {\n  obj.attr = v;\n}\n");
+    expect(ts).toContain("obj.attr = v;");
+    expect(sys.modules["f"]!.interior.nodes.map((n) => n.kind)).toContain("attrSet");
+  });
+
+  it("lifts a TS subscript assignment `d[k] = v;` to `indexSet` and is a fixed point", () => {
+    const { sys, ts } = rt("export function f(d: Bag, k: string, v: number): void {\n  d[k] = v;\n}\n");
+    expect(ts).toContain("d[k] = v;");
+    expect(sys.modules["f"]!.interior.nodes.map((n) => n.kind)).toContain("indexSet");
+  });
+
+  it("lifts an augmented TS subscript `d[k] += v;` (desugars, fixed point)", () => {
+    const { ts } = rt("export function f(d: Bag, k: string, v: number): void {\n  d[k] += v;\n}\n");
+    expect(ts).toContain("d[k] = (d[k] + v);");
   });
 });
 

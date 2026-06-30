@@ -244,6 +244,26 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
+    case "attrSet": {
+      // Write an attribute on an arbitrary receiver: the receiver flows in on
+      // "obj", the written value on "value"; a control-sequenced effect (no
+      // data-out), like stateSet but with a wired receiver.
+      const id = newNode(ctx, { kind: "attrSet", label: s.attr, attr: s.attr }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
+    case "indexSet": {
+      // Write an indexed element `d[k] = v`: the indexed value on "obj", the key
+      // on "key", the written value on "value". Like attrSet, a sequenced effect.
+      const id = newNode(ctx, { kind: "indexSet", label: "index" }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, s.key), `${id}:key`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
     case "expr": {
       const id = lowerSequencedCall(ctx, expectCall(s.expr), undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
@@ -767,6 +787,8 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
       case "let": case "assign": exprReads(s.expr, out); break;
       case "print": exprReads(s.arg, out); break;
       case "stateSet": exprReads(s.value, out); break;
+      case "attrSet": exprReads(s.obj, out); exprReads(s.value, out); break;
+      case "indexSet": exprReads(s.obj, out); exprReads(s.key, out); exprReads(s.value, out); break;
       case "expr": exprReads(s.expr, out); break;
       case "return": exprReads(s.expr, out); break;
       case "returnObject": s.fields.forEach((f) => exprReads(f.expr, out)); break;
@@ -837,6 +859,8 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "let": case "assign": expose(readsOf(s.expr)); killed.add(s.name); break;
       case "print": expose(readsOf(s.arg)); break;
       case "stateSet": expose(readsOf(s.value)); break;
+      case "attrSet": expose(readsOf(s.obj)); expose(readsOf(s.value)); break;
+      case "indexSet": expose(readsOf(s.obj)); expose(readsOf(s.key)); expose(readsOf(s.value)); break;
       case "expr": expose(readsOf(s.expr)); break;
       case "return": expose(readsOf(s.expr)); break;
       case "returnObject": s.fields.forEach((f) => expose(readsOf(f.expr))); break;

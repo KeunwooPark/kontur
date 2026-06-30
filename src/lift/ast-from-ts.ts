@@ -274,6 +274,38 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
       return { t: "assign", name, expr: { t: "bin", op: aug, a: { t: "var", name }, b: liftExpr(be.right, sf) } };
     }
   }
+  // Assignment to a member or subscript lvalue: `obj.attr = …` / `obj[k] = …`,
+  // plain or augmented. `this.attr =` was taken above as stateSet; what remains
+  // writes an arbitrary receiver (attrSet) or an indexed element (indexSet) — the
+  // write-side siblings of the `attr` / `index` reads. An augmented form desugars
+  // to `lhs = lhs <op> rhs`, reading the current value first (a source fixed
+  // point, like `x += y`). A `this.attr +=` is left to the final throw (the
+  // enclosing-class path is Python's stateSet world, out of scope here).
+  if (
+    ts.isExpressionStatement(s) &&
+    ts.isBinaryExpression(s.expression) &&
+    (ts.isElementAccessExpression(s.expression.left) ||
+      (ts.isPropertyAccessExpression(s.expression.left) &&
+        s.expression.left.expression.kind !== ts.SyntaxKind.ThisKeyword))
+  ) {
+    const be = s.expression;
+    const lhs = be.left;
+    const isEq = be.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+    const aug = AUG_OP[be.operatorToken.kind];
+    if (isEq || aug) {
+      const rhs = liftExpr(be.right, sf);
+      if (ts.isPropertyAccessExpression(lhs)) {
+        const obj = liftExpr(lhs.expression, sf);
+        const value: Expr = isEq ? rhs : { t: "bin", op: aug!, a: { t: "attr", obj, name: lhs.name.text }, b: rhs };
+        return { t: "attrSet", obj, attr: lhs.name.text, value };
+      }
+      const ea = lhs as ts.ElementAccessExpression;
+      const obj = liftExpr(ea.expression, sf);
+      const key = liftExpr(ea.argumentExpression, sf);
+      const value: Expr = isEq ? rhs : { t: "bin", op: aug!, a: { t: "index", obj, key }, b: rhs };
+      return { t: "indexSet", obj, key, value };
+    }
+  }
   if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
     const call = s.expression;
     if (
