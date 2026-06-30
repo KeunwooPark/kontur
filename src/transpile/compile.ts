@@ -297,6 +297,17 @@ class ModuleCompiler {
         return stmts;
       }
 
+      if (node.kind === "yield") {
+        // Sequenced (not terminal): a yield suspends then resumes.
+        stmts.push({
+          t: "yield",
+          ...(this.dataSrc.has(`${node.id}:value`) ? { value: this.resolveInput(node.id, "value") } : {}),
+          ...(node.delegate ? { delegate: true } : {}),
+        });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "stateSet") {
         stmts.push({ t: "stateSet", attr: node.attr, value: this.resolveInput(node.id, "value") });
         cur = this.controlNext(node.id);

@@ -1400,6 +1400,35 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: yield / generators (item 22)", () => {
+  const rtg = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts `yield value` in a loop and round-trips; TS emits a generator", () => {
+    const { sys, py } = rtg("def gen(items: list) -> None:\n    for x in items:\n        yield process(x)\n");
+    expect(py).toContain("yield process(x)");
+    expect(sys.modules["gen"]!.interior.nodes.map((n) => n.kind)).toContain("yield");
+    expect(transpile(sys, "ts")).toContain("export function* gen");
+    expect(transpile(sys, "ts")).toContain("yield process(x);");
+  });
+
+  it("lifts `yield from` (delegation) and round-trips", () => {
+    const { py } = rtg("def chain(a: list, b: list) -> None:\n    yield from a\n    yield from b\n");
+    expect(py).toContain("yield from a");
+    expect(transpile(liftPython(py), "ts")).toContain("yield* a;");
+  });
+
+  it("lifts a bare `yield` and round-trips", () => {
+    const { py } = rtg("def ticks(n: int) -> None:\n    for i in range(0, n):\n        yield\n");
+    expect(py).toContain("yield");
+  });
+});
+
 describe.skipIf(!hasPython())("lift: keyword / star / dstar call args (item 12)", () => {
   const rt = (src: string) => {
     const sys = liftPython(src);

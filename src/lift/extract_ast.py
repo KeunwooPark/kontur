@@ -423,6 +423,14 @@ def _stmt(s):
         else:
             out["names"] = unpack_target_names(s.target)
         return out
+    # A `yield value` / `yield from value` / bare `yield` statement (a generator).
+    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Yield):
+        out = {"t": "yield"}
+        if s.value.value is not None:
+            out["value"] = expr(s.value.value)
+        return out
+    if isinstance(s, ast.Expr) and isinstance(s.value, ast.YieldFrom):
+        return {"t": "yield", "value": expr(s.value.value), "delegate": True}
     if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call):
         # `print(x)` is the one call with a dedicated effect node; every other call
         # statement (plain, package, or a self/local method call) routes through

@@ -185,6 +185,11 @@ export const Node = z.discriminatedUnion("kind", [
   // nodes (early, per-branch, nested in a with/loop); each wires its value to the
   // function's data out-port, and only one fires at runtime. `label` is "return".
   z.object({ ...nodeBase, kind: z.literal("return"), label: z.string() }).strict(),
+  // Yield a value from a generator. A control-sequenced effect (control-in/out),
+  // data-in "value" (absent for a bare `yield`); NOT terminal — a yield suspends
+  // and resumes, so control continues. `delegate` marks `yield from` (delegating
+  // to another iterable). A function with any `yield` node is a generator.
+  z.object({ ...nodeBase, kind: z.literal("yield"), label: z.string(), delegate: z.boolean().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("effect"), label: z.string(), io: PortIO, op: Op.optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("const"), label: z.string(), value: z.unknown() }).strict(),
   // A pure data multiplexer (a value-level conditional / ternary). Pins: data-in

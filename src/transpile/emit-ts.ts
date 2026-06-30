@@ -232,6 +232,9 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}console.assert(${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""});`];
     }
     case "pass": return []; // a no-op; TS blocks may be empty (`{}`)
+    case "yield":
+      if (s.value === undefined) return [`${indent}yield;`];
+      return [`${indent}yield${s.delegate ? "*" : ""} ${expr(s.value)};`];
     case "break": return [`${indent}break;`];
     case "continue": return [`${indent}continue;`];
   }
@@ -263,12 +266,26 @@ function tsParam(p: Param): string {
   return `${rest}${camel(p.name)}${anno}${dflt}`;
 }
 
+/** Does any statement (recursing into nested blocks) yield? Such a function is a
+ *  generator — `function*` in TS. (Nested function bodies aren't reached here.) */
+function containsYield(stmts: Stmt[]): boolean {
+  for (const s of stmts) {
+    if (s.t === "yield") return true;
+    if (s.t === "if" && (containsYield(s.then) || containsYield(s.else))) return true;
+    if ((s.t === "for" || s.t === "while" || s.t === "foreach" || s.t === "with") && containsYield(s.body)) return true;
+    if (s.t === "try" && (containsYield(s.body) || containsYield(s.handler) || containsYield(s.orelse ?? []) || containsYield(s.finalbody ?? []))) return true;
+  }
+  return false;
+}
+
 function fn(f: Fn, indent = ""): string {
   const params = f.params.map(tsParam).join(", ");
+  // A function containing any `yield` is a generator: `function*` / `*method`.
+  const star = containsYield(f.body) ? "*" : "";
   // A method drops the `export function` preamble; the class owns it.
   const head = f.isMethod
-    ? `${indent}${camel(f.name)}(${params}): ${returnType(f)} {`
-    : `${indent}export function ${camel(f.name)}(${params}): ${returnType(f)} {`;
+    ? `${indent}${star}${camel(f.name)}(${params}): ${returnType(f)} {`
+    : `${indent}export function${star} ${camel(f.name)}(${params}): ${returnType(f)} {`;
   const lines = f.doc !== undefined ? jsDoc(f.doc, indent) : [];
   // Decorators follow the doc block, each on its own `@<text>` line.
   for (const d of f.decorators ?? []) lines.push(`${indent}@${d}`);

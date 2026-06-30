@@ -432,6 +432,14 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // A no-op: no IR node, control flows straight through. An empty block
       // re-emits `pass` on the way out, so the round-trip holds.
       return prev;
+    case "yield": {
+      // A control-sequenced effect (like print): the yielded value flows in on
+      // "value"; control continues (a yield suspends and resumes, NOT terminal).
+      const id = newNode(ctx, { kind: "yield", label: "yield", ...(s.delegate ? { delegate: true } : {}) }, undefined, s.span);
+      if (s.value !== undefined) ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
     case "return":
     case "returnObject": {
       // Multi-exit: a `return` is a TERMINAL control node (control-in, data-in
@@ -933,6 +941,7 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
       case "indexSet": exprReads(s.obj, out); exprReads(s.key, out); exprReads(s.value, out); break;
       case "expr": exprReads(s.expr, out); break;
       case "return": if (s.expr) exprReads(s.expr, out); break;
+      case "yield": if (s.value) exprReads(s.value, out); break;
       case "returnObject": s.fields.forEach((f) => exprReads(f.expr, out)); break;
       case "throw": exprReads(s.arg, out); break;
       case "rethrow": exprReads(s.value, out); break;
@@ -1013,6 +1022,7 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "indexSet": expose(readsOf(s.obj)); expose(readsOf(s.key)); expose(readsOf(s.value)); break;
       case "expr": expose(readsOf(s.expr)); break;
       case "return": if (s.expr) expose(readsOf(s.expr)); break;
+      case "yield": if (s.value) expose(readsOf(s.value)); break;
       case "returnObject": s.fields.forEach((f) => expose(readsOf(f.expr))); break;
       case "throw": expose(readsOf(s.arg)); break;
       case "rethrow": expose(readsOf(s.value)); break;
