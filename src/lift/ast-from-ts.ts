@@ -53,6 +53,20 @@ function liftImport(node: ts.ImportDeclaration): Import {
   return { source, bindings };
 }
 
+/**
+ * The text of a node's JSDoc block (`/** … *​/`), or undefined if it has none.
+ * The compiler API hands back the cleaned comment (the ` * ` margins stripped,
+ * lines rejoined with newlines) — the exact inverse of how `emit-ts` renders a
+ * `doc`, so it round-trips. Only a plain-text comment is captured; a comment
+ * carrying `@tag` links surfaces as a non-string and is left undocumented.
+ */
+function docOf(node: ts.Node): string | undefined {
+  const jsDoc = (node as { jsDoc?: ts.JSDoc[] }).jsDoc;
+  if (!jsDoc || jsDoc.length === 0) return undefined;
+  const comment = jsDoc[jsDoc.length - 1]!.comment;
+  return typeof comment === "string" ? comment : undefined;
+}
+
 function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
   const fields: Field[] = [];
   const methods: Fn[] = [];
@@ -60,12 +74,13 @@ function liftClass(node: ts.ClassDeclaration, sf: ts.SourceFile): Class {
     if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
       fields.push({ name: member.name.text, type: mapType(member.type) });
     } else if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.body) {
-      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true));
+      methods.push(liftCallable(member.name.text, member.parameters, member.type, member.body, sf, true, docOf(member)));
     } else {
       throw new Error(`lift(ts): unsupported class member "${ts.SyntaxKind[member.kind]}"`);
     }
   }
-  return { name: node.name!.text, fields, methods };
+  const doc = docOf(node);
+  return { name: node.name!.text, fields, methods, ...(doc !== undefined ? { doc } : {}) };
 }
 
 function mapType(t: ts.TypeNode | undefined): string {
@@ -80,7 +95,7 @@ function mapType(t: ts.TypeNode | undefined): string {
 }
 
 function liftFn(node: ts.FunctionDeclaration, sf: ts.SourceFile): Fn {
-  return liftCallable(node.name!.text, node.parameters, node.type, node.body!, sf, false);
+  return liftCallable(node.name!.text, node.parameters, node.type, node.body!, sf, false, docOf(node));
 }
 
 /** Shared lowering for a function declaration and a class method. */
@@ -91,6 +106,7 @@ function liftCallable(
   body: ts.Block,
   sf: ts.SourceFile,
   isMethod: boolean,
+  doc: string | undefined,
 ): Fn {
   const params: Param[] = parameters.map((p) => ({
     name: (p.name as ts.Identifier).text,
@@ -101,7 +117,7 @@ function liftCallable(
       ? []
       : [{ name: "result", type: mapType(type) }];
   const stmts = body.statements.map((s) => liftStmt(s, sf));
-  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}) };
+  return { name, params, returns, body: stmts, ...(isMethod ? { isMethod: true } : {}), ...(doc !== undefined ? { doc } : {}) };
 }
 
 function block(stmt: ts.Statement, sf: ts.SourceFile): Stmt[] {

@@ -130,6 +130,16 @@ function stmt(s: Stmt, indent: string): string[] {
   }
 }
 
+/**
+ * Render a captured doc string as a JSDoc block, one ` * `-margined line each, so
+ * the TS lifter recovers the exact text via the compiler's JSDoc parsing (which
+ * strips that margin and rejoins with newlines). The neutral-AST counterpart of a
+ * Python docstring.
+ */
+function jsDoc(doc: string, indent: string): string[] {
+  return [`${indent}/**`, ...doc.split("\n").map((l) => `${indent} * ${l}`), `${indent} */`];
+}
+
 function returnType(f: Fn): string {
   return f.returns.length === 0 ? "void"
     : f.returns.length === 1 ? tsType(f.returns[0]!.type)
@@ -142,14 +152,16 @@ function fn(f: Fn, indent = ""): string {
   const head = f.isMethod
     ? `${indent}${camel(f.name)}(${params}): ${returnType(f)} {`
     : `${indent}export function ${camel(f.name)}(${params}): ${returnType(f)} {`;
-  const lines = [head];
+  const lines = f.doc !== undefined ? jsDoc(f.doc, indent) : [];
+  lines.push(head);
   for (const s of f.body) lines.push(...stmt(s, indent + "  "));
   lines.push(`${indent}}`);
   return lines.join("\n");
 }
 
 function cls(c: Class): string {
-  const lines = [`export class ${pascal(c.name)} {`];
+  const lines = c.doc !== undefined ? jsDoc(c.doc, "") : [];
+  lines.push(`export class ${pascal(c.name)} {`);
   for (const f of c.fields) lines.push(`  ${camel(f.name)}: ${tsType(f.type)};`);
   for (const m of c.methods) {
     lines.push("");

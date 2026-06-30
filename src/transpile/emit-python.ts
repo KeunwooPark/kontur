@@ -126,6 +126,17 @@ function stmt(s: Stmt, indent: string): string[] {
   }
 }
 
+/**
+ * A Python string literal that reparses to EXACTLY `s`, so a captured docstring
+ * round-trips. A plain one-liner uses the idiomatic triple-quoted form; anything
+ * with a newline, backslash, or quote falls back to a JSON-style escaped literal
+ * (which Python parses identically), so fidelity never hinges on the content.
+ */
+function pyDocLiteral(s: string): string {
+  if (s.length > 0 && !/[\n\r\\"]/.test(s)) return `"""${s}"""`;
+  return JSON.stringify(s);
+}
+
 function fn(f: Fn, indent = ""): string {
   const declared = f.params.map((p) => `${snake(p.name)}: ${pyType(p.type)}`);
   // A method takes an implicit leading `self`.
@@ -136,6 +147,9 @@ function fn(f: Fn, indent = ""): string {
     : "dict";
   const lines = [`${indent}def ${snake(f.name)}(${params}) -> ${ret}:`];
   const body: string[] = [];
+  // The docstring is the first body statement (PEP 257). A doc-only body is a
+  // complete Python body, so it needs no `pass` filler.
+  if (f.doc !== undefined) body.push(`${indent}    ${pyDocLiteral(f.doc)}`);
   for (const s of f.body) body.push(...stmt(s, indent + "    "));
   if (body.length === 0) body.push(`${indent}    pass`);
   lines.push(...body);
@@ -144,12 +158,14 @@ function fn(f: Fn, indent = ""): string {
 
 function cls(c: Class): string {
   const lines = [`class ${pascal(c.name)}:`];
+  if (c.doc !== undefined) lines.push(`    ${pyDocLiteral(c.doc)}`);
   for (const field of c.fields) lines.push(`    ${snake(field.name)}: ${pyType(field.type)}`);
   for (const m of c.methods) {
     lines.push("");
     lines.push(fn(m, "    "));
   }
-  if (c.fields.length === 0 && c.methods.length === 0) lines.push("    pass");
+  // A docstring is itself a complete body, so an otherwise-empty class needs no `pass`.
+  if (c.doc === undefined && c.fields.length === 0 && c.methods.length === 0) lines.push("    pass");
   return lines.join("\n");
 }
 

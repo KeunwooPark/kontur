@@ -87,7 +87,7 @@ function compileClass(
       fn.isMethod = true;
       return fn;
     });
-  return { name: id, fields, methods };
+  return { name: id, fields, methods, ...(mod.doc !== undefined ? { doc: mod.doc } : {}) };
 }
 
 class ModuleCompiler {
@@ -145,7 +145,7 @@ class ModuleCompiler {
     // Emit under the module's bare local name: the project driver qualifies ids
     // by path (`src/util#format`), but the function declaration uses the bare
     // name. For single-file lifts the id is already bare, so this is the id.
-    return { name: localName(this.id), params, returns, body };
+    return { name: localName(this.id), params, returns, body, ...(this.mod.doc !== undefined ? { doc: this.mod.doc } : {}) };
   }
 
   /** Walk the control chain starting at `target`, producing statements. */

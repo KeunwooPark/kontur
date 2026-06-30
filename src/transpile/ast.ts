@@ -90,6 +90,12 @@ export interface Fn {
   body: Stmt[];
   /** When true, emit as a class method (no `export function`, `self`/`this`). */
   isMethod?: boolean;
+  /**
+   * The captured docstring — a Python PEP 257 docstring or a TS JSDoc block. Held
+   * as the human text only (no quotes/asterisks); each emitter re-wraps it in its
+   * own syntax so it round-trips. Absent ⇒ the source carried no doc.
+   */
+  doc?: string;
   /** Provenance back to the function/method definition (lifters only). */
   span?: SourceSpan;
 }
@@ -106,6 +112,8 @@ export interface Class {
   name: string;
   fields: Field[];
   methods: Fn[];
+  /** The captured class docstring (human text only); see `Fn.doc`. */
+  doc?: string;
   /** Provenance back to the class definition (lifters only). */
   span?: SourceSpan;
 }
