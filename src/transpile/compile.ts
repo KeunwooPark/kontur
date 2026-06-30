@@ -122,7 +122,13 @@ class ModuleCompiler {
   compile(): Fn {
     const params = this.mod.ports
       .filter((p) => p.io === "in" && p.wire === "data")
-      .map((p) => ({ name: p.name, type: p.type }));
+      .map((p) => ({
+        name: p.name,
+        type: p.type,
+        ...(p.default !== undefined ? { default: p.default } : {}),
+        ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
+        ...(p.keywordOnly ? { keywordOnly: true } : {}),
+      }));
     const returns = this.mod.ports
       .filter((p) => p.io === "out" && p.wire === "data")
       .map((p) => ({ name: p.name, type: p.type }));

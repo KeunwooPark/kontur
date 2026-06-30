@@ -53,9 +53,29 @@ export const Op = z.enum([
 ]);
 
 /**
+ * A parameter's default value, carried on its in-data port so a defaulted
+ * signature round-trips. Restricted to a literal or a bare name reference — the
+ * two forms real signatures overwhelmingly use; a richer default expression is
+ * deferred (it refuses loudly at lift rather than lifting to a lie). This is
+ * signature fidelity, not dataflow: defaults are not lowered into the interior.
+ */
+export const ParamDefault = z.discriminatedUnion("t", [
+  z.object({ t: z.literal("lit"), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }).strict(),
+  z.object({ t: z.literal("var"), name: z.string().min(1) }).strict(),
+]);
+
+/**
  * A port is one endpoint of a module's PUBLIC CONTRACT. The set of a module's
  * ports must correspond exactly to the unconnected boundary of its interior
- * (the port-boundary invariant — checked in validate.ts).
+ * (the port-boundary invariant — checked in validate.ts), except that an in-data
+ * port MAY be unconnected: an unused parameter is a faithful input the interior
+ * simply ignores (`**kwargs` forwarded on, a param read by no branch).
+ *
+ * The optional fields below capture full Python/TS signature shape so it
+ * round-trips, and are meaningful only on in-data ports (a parameter):
+ *   - `default`   — the parameter's default value.
+ *   - `variadic`  — `*args` ("args") / `**kwargs` ("kwargs") / TS rest ("args").
+ *   - `keywordOnly` — a Python keyword-only parameter (declared after `*`).
  */
 export const Port = z
   .object({
@@ -64,6 +84,9 @@ export const Port = z
     type: z.string().min(1),
     io: PortIO,
     wire: WireKind,
+    default: ParamDefault.optional(),
+    variadic: z.enum(["args", "kwargs"]).optional(),
+    keywordOnly: z.literal(true).optional(),
   })
   .strict();
 
@@ -248,6 +271,7 @@ export type SourceSpan = z.infer<typeof SourceSpan>;
 export type PortIO = z.infer<typeof PortIO>;
 export type WireKind = z.infer<typeof WireKind>;
 export type Op = z.infer<typeof Op>;
+export type ParamDefault = z.infer<typeof ParamDefault>;
 export type Port = z.infer<typeof Port>;
 export type ImportBinding = z.infer<typeof ImportBinding>;
 export type Import = z.infer<typeof Import>;

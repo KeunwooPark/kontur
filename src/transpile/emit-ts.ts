@@ -1,6 +1,6 @@
 /** Render the neutral AST as TypeScript. */
 import type { Op } from "../ir/schema.js";
-import type { Class, Expr, Fn, Import, Program, Stmt } from "./ast.js";
+import type { Class, Expr, Fn, Import, Param, Program, Stmt } from "./ast.js";
 import { camel, pascal } from "./naming.js";
 
 const BIN: Partial<Record<Op, string>> = {
@@ -146,8 +146,18 @@ function returnType(f: Fn): string {
     : `{ ${f.returns.map((r) => `${r.name}: ${tsType(r.type)}`).join("; ")} }`;
 }
 
+/** One parameter: a `...` rest prefix for a variadic, the annotation (omitted
+ *  for "any"), and a default. TS has no keyword-only form, so that marker is not
+ *  rendered (a Python-only signature detail). */
+function tsParam(p: Param): string {
+  const rest = p.variadic !== undefined ? "..." : "";
+  const anno = p.type === "any" ? "" : `: ${tsType(p.type)}`;
+  const dflt = p.default !== undefined ? ` = ${expr(p.default)}` : "";
+  return `${rest}${camel(p.name)}${anno}${dflt}`;
+}
+
 function fn(f: Fn, indent = ""): string {
-  const params = f.params.map((p) => `${camel(p.name)}: ${tsType(p.type)}`).join(", ");
+  const params = f.params.map(tsParam).join(", ");
   // A method drops the `export function` preamble; the class owns it.
   const head = f.isMethod
     ? `${indent}${camel(f.name)}(${params}): ${returnType(f)} {`

@@ -168,7 +168,10 @@ function checkModule(
   // correct side. An `in` port feeds the interior (appears as a source); an
   // `out` port is produced by the interior (appears as a target).
   for (const port of mod.ports) {
-    if (port.io === "in" && !boundaryUseAsFrom.has(port.name)) {
+    // A data in-port (a parameter) MAY be unconnected: an unused parameter is a
+    // faithful input the interior ignores (`**kwargs` passed through, a param no
+    // branch reads). Control in-ports (exec) must still feed the interior.
+    if (port.io === "in" && port.wire !== "data" && !boundaryUseAsFrom.has(port.name)) {
       issues.push({
         path: `${at}.ports[${port.name}]`,
         message: `in-port "${port.name}" is not connected to the interior (port-boundary invariant)`,

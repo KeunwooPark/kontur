@@ -238,24 +238,17 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
     expect(() => liftPython(src)).toThrow(/decorator/);
   });
 
-  it("refuses a default parameter value", () => {
-    const src = "def f(n: int = 1) -> None:\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/default/);
+  // Item 4 turned defaults, *args/**kwargs, and keyword-only params into real
+  // captured IR (see "lift: full signatures" below). Positional-only stays
+  // refused — rarer, and still without an IR home.
+  it("refuses a positional-only parameter", () => {
+    const src = "def f(n: int, /) -> None:\n    print(n)\n";
+    expect(() => liftPython(src)).toThrow(/positional-only/);
   });
 
-  it("refuses *args", () => {
-    const src = "def f(*args) -> None:\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/args/);
-  });
-
-  it("refuses **kwargs", () => {
-    const src = "def f(**kwargs) -> None:\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/kwargs/);
-  });
-
-  it("refuses a keyword-only parameter", () => {
-    const src = "def f(*, n: int) -> None:\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/keyword-only/);
+  it("refuses a non-literal default value (only a literal or name is modelled)", () => {
+    const src = "def f(n: int = 1 + 1) -> None:\n    print(n)\n";
+    expect(() => liftPython(src)).toThrow(/default value/);
   });
 
   it("refuses class inheritance (base class)", () => {
@@ -266,6 +259,76 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
   it("refuses a class decorator", () => {
     const src = "@deco\nclass C:\n    pass\n";
     expect(() => liftPython(src)).toThrow(/decorator/);
+  });
+});
+
+// Roadmap item 4: full signatures. Default values, *args/**kwargs, and
+// keyword-only params are captured on the in-data ports (not lowered into the
+// interior — they are contract shape) and re-emitted, so a real signature
+// round-trips. An unused param (a forwarded **kwargs, a param no branch reads)
+// is faithful, so the port-boundary invariant tolerates an unconnected in-port.
+describe.skipIf(!hasPython())("lift: full signatures (Python)", () => {
+  const roundtrips = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "python");
+    expect(codeA).toContain(src.trimEnd());
+    expect(transpile(liftPython(codeA), "python")).toBe(codeA); // fixed point
+    return sys;
+  };
+
+  it("captures a literal default and round-trips it", () => {
+    const sys = roundtrips("def greet(name: str, count: int = 1) -> None:\n    print(name)\n");
+    const port = sys.modules["greet"]!.ports.find((p) => p.name === "count");
+    expect(port?.default).toEqual({ t: "lit", value: 1 });
+  });
+
+  it("captures a None / bool / str default and round-trips it", () => {
+    roundtrips("def opts(a: str = \"x\", b: bool = False, c: int = None) -> None:\n    print(a)\n");
+  });
+
+  it("captures a bare-name default and round-trips it", () => {
+    const sys = roundtrips("def connect(timeout: int = default_timeout) -> None:\n    print(timeout)\n");
+    const port = sys.modules["connect"]!.ports.find((p) => p.name === "timeout");
+    expect(port?.default).toEqual({ t: "var", name: "default_timeout" });
+  });
+
+  it("captures *args (variadic, unused) and round-trips it", () => {
+    const sys = roundtrips("def collect(first: int, *rest) -> None:\n    print(first)\n");
+    expect(sys.modules["collect"]!.ports.find((p) => p.name === "rest")?.variadic).toBe("args");
+  });
+
+  it("captures **kwargs (variadic, unused) and round-trips it", () => {
+    const sys = roundtrips("def call(url: str, **kwargs) -> None:\n    print(url)\n");
+    expect(sys.modules["call"]!.ports.find((p) => p.name === "kwargs")?.variadic).toBe("kwargs");
+  });
+
+  it("captures a keyword-only param (bare * separator) and round-trips it", () => {
+    const sys = roundtrips("def fetch(a: int, *, verbose: bool = False) -> None:\n    print(a)\n");
+    expect(sys.modules["fetch"]!.ports.find((p) => p.name === "verbose")?.keywordOnly).toBe(true);
+  });
+
+  it("round-trips a full signature (positional, *args, kw-only default, **kwargs)", () => {
+    roundtrips("def request(method: str, url: str, *args, timeout: int = 30, **kwargs) -> None:\n    print(method)\n");
+  });
+});
+
+describe("lift: full signatures (TS)", () => {
+  it("captures a default and a rest param and round-trips them", () => {
+    const src = [
+      "export function collect(first: number, count: number = 1, ...rest: number[]): void {",
+      "  console.log(first);",
+      "}",
+      "",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const ports = sys.modules["collect"]!.ports;
+    expect(ports.find((p) => p.name === "count")?.default).toEqual({ t: "lit", value: 1 });
+    expect(ports.find((p) => p.name === "rest")?.variadic).toBe("args");
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toContain("count: number = 1, ...rest: number[]");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
   });
 });
 
