@@ -173,6 +173,7 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
   fn = normalizeReturns(fn);
   fn = { ...fn, body: foldGuards(fn.body) };
   assertSupported(fn);
+  assertNoLoopCarriedState(fn);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
     ...shared, counter: { n: 0 }, returnSource: undefined,
@@ -569,6 +570,150 @@ function assertSupported(fn: Fn): void {
     else if (s.t === "foreach") s.body.forEach(forbidNested);
     else if (s.t === "try") { s.body.forEach(forbidNested); s.handler.forEach(forbidNested); }
   });
+}
+
+/**
+ * Reject loops that carry state across iterations. The IR is single-assignment
+ * dataflow: a `let`/`assign` is not a node, it just rebinds the name to a fresh
+ * data source (see the `assign`/`let` cases in `lowerStmt`). That works in
+ * straight-line code, but a loop body is lowered ONCE — there is no node for a
+ * feedback edge — so a variable updated each iteration would be silently
+ * flattened to a single value (e.g. `total = total + i` collapses to `0 + i`).
+ *
+ * Two unrepresentable shapes are refused, mirroring the manifesto's "never lie":
+ *   - carried IN:  a body variable read before it is (re)assigned in the body —
+ *     the read reaches in from the previous iteration (an accumulator/fold).
+ *   - carried OUT: a body variable read after the loop — the read would wire to
+ *     an endpoint that only exists inside the loop.
+ * Loop-local temporaries (assigned then read within the same iteration, never
+ * carried) stay supported.
+ */
+function assertNoLoopCarriedState(fn: Fn): void {
+  walkForLoops(fn.body, fn.name);
+}
+
+function walkForLoops(stmts: Stmt[], fnName: string): void {
+  stmts.forEach((s, i) => {
+    if (s.t === "for" || s.t === "foreach" || s.t === "while") {
+      const assigned = assignedNames(s.body);
+      if (s.t !== "while") assigned.delete(s.varName); // the loop var is not carried
+      if (assigned.size > 0) {
+        const exposed = upwardExposedReads(s.body);
+        const after = new Set<string>();
+        blockReads(stmts.slice(i + 1), after);
+        for (const name of assigned) {
+          if (exposed.has(name)) failCarried(fnName, name, "read across iterations");
+          if (after.has(name)) failCarried(fnName, name, "read after the loop");
+        }
+      }
+    }
+    forEachChildBlock(s, (b) => walkForLoops(b, fnName));
+  });
+}
+
+function failCarried(fnName: string, name: string, why: string): never {
+  throw new Error(
+    `lift: function "${fnName}" carries variable "${name}" across loop iterations ` +
+      `(${why}) — loop-carried state has no IR node, so the dataflow graph cannot ` +
+      `represent it faithfully (example level)`,
+  );
+}
+
+/** Run `fn` over every nested statement block of `s`. */
+function forEachChildBlock(s: Stmt, fn: (block: Stmt[]) => void): void {
+  switch (s.t) {
+    case "if": fn(s.then); fn(s.else); break;
+    case "for": case "while": case "foreach": fn(s.body); break;
+    case "try": fn(s.body); fn(s.handler); break;
+  }
+}
+
+/** Names bound by a `let`/`assign` anywhere within a block (descends nested blocks). */
+function assignedNames(stmts: Stmt[], out: Set<string> = new Set()): Set<string> {
+  for (const s of stmts) {
+    if (s.t === "let" || s.t === "assign") out.add(s.name);
+    forEachChildBlock(s, (b) => assignedNames(b, out));
+  }
+  return out;
+}
+
+/** Variable names a statement reads (RHS / conditions / args), descending blocks. */
+function blockReads(stmts: Stmt[], out: Set<string>): void {
+  for (const s of stmts) {
+    switch (s.t) {
+      case "let": case "assign": exprReads(s.expr, out); break;
+      case "print": exprReads(s.arg, out); break;
+      case "stateSet": exprReads(s.value, out); break;
+      case "expr": exprReads(s.expr, out); break;
+      case "return": exprReads(s.expr, out); break;
+      case "returnObject": s.fields.forEach((f) => exprReads(f.expr, out)); break;
+      case "throw": exprReads(s.arg, out); break;
+      case "rethrow": exprReads(s.value, out); break;
+      case "if": exprReads(s.cond, out); break;
+      case "for": exprReads(s.from, out); exprReads(s.to, out); break;
+      case "while": exprReads(s.cond, out); break;
+      case "foreach": exprReads(s.iter, out); break;
+    }
+    forEachChildBlock(s, (b) => blockReads(b, out));
+  }
+}
+
+/** Variable names read by an expression. */
+function exprReads(e: Expr, out: Set<string>): void {
+  switch (e.t) {
+    case "var": out.add(e.name); break;
+    case "member": out.add(e.name); break;
+    case "bin": exprReads(e.a, out); exprReads(e.b, out); break;
+    case "un": exprReads(e.x, out); break;
+    case "cond": exprReads(e.cond, out); exprReads(e.then, out); exprReads(e.else, out); break;
+    case "array": e.elems.forEach((el) => exprReads(el, out)); break;
+    case "comprehension": exprReads(e.from, out); exprReads(e.to, out); exprReads(e.elem, out); break;
+    case "call": e.args.forEach((a) => exprReads(a, out)); break;
+    // lit, stateGet: no variable reads
+  }
+}
+
+/**
+ * Names read within `stmts` before being assigned there — reads that reach in
+ * from the loop header (an outer binding or a previous iteration). Sound by
+ * design: only a *prior top-level* `let`/`assign` "kills" a name; assignments
+ * nested in branches/loops (which may not run) never kill, so a genuinely
+ * carried read is never missed — we may only over-refuse, never lie.
+ */
+function upwardExposedReads(stmts: Stmt[]): Set<string> {
+  const exposed = new Set<string>();
+  const killed = new Set<string>();
+  const expose = (names: Iterable<string>): void => {
+    for (const n of names) if (!killed.has(n)) exposed.add(n);
+  };
+  const readsOf = (e: Expr): Set<string> => {
+    const r = new Set<string>();
+    exprReads(e, r);
+    return r;
+  };
+  const nested = (block: Stmt[], loopVar?: string): void => {
+    const inner = upwardExposedReads(block);
+    if (loopVar) inner.delete(loopVar);
+    expose(inner);
+  };
+  for (const s of stmts) {
+    switch (s.t) {
+      case "let": case "assign": expose(readsOf(s.expr)); killed.add(s.name); break;
+      case "print": expose(readsOf(s.arg)); break;
+      case "stateSet": expose(readsOf(s.value)); break;
+      case "expr": expose(readsOf(s.expr)); break;
+      case "return": expose(readsOf(s.expr)); break;
+      case "returnObject": s.fields.forEach((f) => expose(readsOf(f.expr))); break;
+      case "throw": expose(readsOf(s.arg)); break;
+      case "rethrow": expose(readsOf(s.value)); break;
+      case "if": expose(readsOf(s.cond)); nested(s.then); nested(s.else); break;
+      case "for": expose(readsOf(s.from)); expose(readsOf(s.to)); nested(s.body, s.varName); break;
+      case "while": expose(readsOf(s.cond)); nested(s.body); break;
+      case "foreach": expose(readsOf(s.iter)); nested(s.body, s.varName); break;
+      case "try": nested(s.body); nested(s.handler, s.catchParam); break;
+    }
+  }
+  return exposed;
 }
 
 function expectCall(e: Expr): Extract<Expr, { t: "call" }> {

@@ -560,6 +560,50 @@ describe("lift: behavioral round-trip preserves observable behavior (TS)", () =>
 });
 
 describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
+  it("refuses a loop accumulator (carried IN) instead of flattening it to one iteration", () => {
+    // Regression: `total = total + i` reads `total` from the prior iteration. The
+    // single-assignment dataflow IR has no feedback edge, so lifting once used to
+    // silently collapse this to `0 + i`. It must be refused, not lifted to a lie.
+    const src = [
+      "export function sum(n: number): number {",
+      "  let total = 0;",
+      "  for (let i = 1; i <= n; i++) {",
+      "    total = total + i;",
+      "  }",
+      "  return total;",
+      "}",
+    ].join("\n");
+    expect(() => liftTypeScript(src)).toThrow(/carries variable "total" across loop/);
+  });
+
+  it("refuses a value carried OUT of a loop (read after the loop)", () => {
+    const src = [
+      "export function lastDouble(n: number): number {",
+      "  let last = 0;",
+      "  for (let i = 1; i <= n; i++) {",
+      "    last = i * 2;",
+      "  }",
+      "  return last;",
+      "}",
+    ].join("\n");
+    expect(() => liftTypeScript(src)).toThrow(/carries variable "last" across loop/);
+  });
+
+  it("still lifts a loop-LOCAL temporary (assigned and read within one iteration)", () => {
+    const src = [
+      "export function doubles(n: number): void {",
+      "  for (let i = 1; i <= n; i++) {",
+      "    const d = i * 2;",
+      "    console.log(d);",
+      "  }",
+      "}",
+    ].join("\n");
+    const lifted = liftTypeScript(src);
+    expect(validateSystem(lifted).ok).toBe(true);
+    // The temporary inlines on the way back out — behavior preserved, no carry.
+    expect(transpile(lifted, "ts")).toContain("console.log((i * 2))");
+  });
+
   it("refuses a thrown bare literal (throw \"x\") — not an error construction nor a named value", () => {
     const src = [
       "export function risky(n: number): void {",
