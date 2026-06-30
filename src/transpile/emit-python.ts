@@ -105,7 +105,15 @@ function importLine(imp: Import): string {
   return lines.join("\n");
 }
 
+/** Emit a nested block at `indent`, filling an empty block with `pass` so the
+ *  output stays syntactically valid (e.g. an `except E: pass` handler). */
+function block(stmts: Stmt[], indent: string): string[] {
+  const out = stmts.flatMap((b) => stmt(b, indent));
+  return out.length > 0 ? out : [`${indent}pass`];
+}
+
 function stmt(s: Stmt, indent: string): string[] {
+  const inner = indent + "    ";
   switch (s.t) {
     case "let":
       return [`${indent}${snake(s.name)} = ${expr(s.expr)}`];
@@ -136,49 +144,48 @@ function stmt(s: Stmt, indent: string): string[] {
     case "returnObject":
       return [`${indent}return { ${s.fields.map((f) => `"${f.name}": ${expr(f.expr)}`).join(", ")} }`];
     case "if": {
-      const out = [`${indent}if ${expr(s.cond)}:`];
-      for (const t of s.then) out.push(...stmt(t, indent + "    "));
+      const out = [`${indent}if ${expr(s.cond)}:`, ...block(s.then, inner)];
       if (s.else.length > 0) {
-        out.push(`${indent}else:`);
-        for (const e of s.else) out.push(...stmt(e, indent + "    "));
+        out.push(`${indent}else:`, ...block(s.else, inner));
       }
       return out;
     }
     case "for": {
       const v = snake(s.varName);
       // Inclusive count loop → range(from, to + 1).
-      const out = [`${indent}for ${v} in range(${expr(s.from)}, ${expr(s.to)} + 1):`];
-      for (const b of s.body) out.push(...stmt(b, indent + "    "));
-      return out;
+      return [`${indent}for ${v} in range(${expr(s.from)}, ${expr(s.to)} + 1):`, ...block(s.body, inner)];
     }
     case "while": {
-      const out = [`${indent}while ${expr(s.cond)}:`];
-      for (const b of s.body) out.push(...stmt(b, indent + "    "));
-      return out;
+      return [`${indent}while ${expr(s.cond)}:`, ...block(s.body, inner)];
     }
     case "foreach": {
       const target = s.names ? s.names.map(snake).join(", ") : snake(s.varName!);
-      const out = [`${indent}for ${target} in ${expr(s.iter)}:`];
-      for (const b of s.body) out.push(...stmt(b, indent + "    "));
-      return out;
+      return [`${indent}for ${target} in ${expr(s.iter)}:`, ...block(s.body, inner)];
     }
     case "try": {
-      const out = [`${indent}try:`];
-      for (const b of s.body) out.push(...stmt(b, indent + "    "));
-      // Python needs a type before `as`; the IR catch is catch-all → `Exception`.
-      out.push(s.catchParam ? `${indent}except Exception as ${snake(s.catchParam)}:` : `${indent}except:`);
-      for (const h of s.handler) out.push(...stmt(h, indent + "    "));
+      const out = [`${indent}try:`, ...block(s.body, inner)];
+      // A typed handler names its type(s) — a single `except E` or a tuple
+      // `except (A, B)`. An untyped handler is catch-all: `except Exception as x`
+      // when it binds a variable, or a bare `except:` when it does not.
+      if (s.errorTypes && s.errorTypes.length) {
+        const types = s.errorTypes.length === 1 ? s.errorTypes[0] : `(${s.errorTypes.join(", ")})`;
+        out.push(s.catchParam ? `${indent}except ${types} as ${snake(s.catchParam)}:` : `${indent}except ${types}:`);
+      } else {
+        out.push(s.catchParam ? `${indent}except Exception as ${snake(s.catchParam)}:` : `${indent}except:`);
+      }
+      out.push(...block(s.handler, inner));
+      if (s.orelse && s.orelse.length) out.push(`${indent}else:`, ...block(s.orelse, inner));
+      if (s.finalbody && s.finalbody.length) out.push(`${indent}finally:`, ...block(s.finalbody, inner));
       return out;
     }
     case "with": {
       const head = s.resource ? `with ${expr(s.context)} as ${snake(s.resource)}:` : `with ${expr(s.context)}:`;
-      const out = [`${indent}${head}`];
-      for (const b of s.body) out.push(...stmt(b, indent + "    "));
-      return out;
+      return [`${indent}${head}`, ...block(s.body, inner)];
     }
     case "assert": {
       return [`${indent}assert ${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""}`];
     }
+    case "pass": return [`${indent}pass`];
     case "break": return [`${indent}break`];
     case "continue": return [`${indent}continue`];
   }

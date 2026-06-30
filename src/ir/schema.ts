@@ -128,11 +128,14 @@ export const Node = z.discriminatedUnion("kind", [
   z.object({ ...nodeBase, kind: z.literal("foreach"), label: z.string(), names: z.array(z.string().min(1)).min(2).optional() }).strict(),
   // Protected execution (try/catch). Control-in enters the protected block;
   // control-out "body" runs it, "catch" runs the handler if it raises, and "done"
-  // is the continuation after either path. Data-out "error" is the caught value
-  // (catch-all semantics — the IR models no exception type), wired only when the
-  // handler reads it. `label` is the catch binding name (like a loop's index var),
-  // or "" when the source binds no variable. Its raising counterpart is `throw`.
-  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string() }).strict(),
+  // is the continuation after either path. Data-out "error" is the caught value,
+  // wired only when the handler reads it. `label` is the catch binding name (like a
+  // loop's index var), or "" when the source binds no variable. The handler is
+  // catch-all unless `errorTypes` names the exception type(s) it catches (a typed
+  // `except`); optional control-out "else" runs when the body raised nothing
+  // (`try/else`) and "finally" always runs on the way out (`finally`). Its raising
+  // counterpart is `throw`.
+  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string(), errorTypes: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A context-managed block (`with ctx as r: …`). Control-in enters; data-in
   // "context" is the context-manager expression; data-out "resource" is the bound
   // value (read inside the body), wired only when the source has an `as` clause;
