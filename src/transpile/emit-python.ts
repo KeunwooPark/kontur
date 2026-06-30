@@ -121,6 +121,8 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}${expr(s.obj)}.${s.attr} = ${expr(s.value)}`];
     case "indexSet":
       return [`${indent}${expr(s.obj)}[${expr(s.key)}] = ${expr(s.value)}`];
+    case "destructure":
+      return [`${indent}${s.names.map(snake).join(", ")} = ${expr(s.value)}`];
     case "throw":
       // Absent errorType ⇒ the catch-all `Exception`, mirroring how the `try` side
       // emits `except Exception`; a named type emits that constructor

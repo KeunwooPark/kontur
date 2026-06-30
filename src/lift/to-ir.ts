@@ -269,6 +269,18 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
+    case "destructure": {
+      // Sequence unpacking `a, b = value`: an `unpack` node sequenced in the
+      // control flow. The value flows in once on "value"; each name binds to a
+      // data-out port "0".."n-1" read downstream by var name. Because every name
+      // reads through this single node, the value is evaluated once (an unpack of
+      // a call result calls it once) — unlike desugaring to N separate `value[i]`.
+      const id = newNode(ctx, { kind: "unpack", names: s.names }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.value), `${id}:value`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      s.names.forEach((n, i) => ctx.varMap.set(n, `${id}:${i}`));
+      return id;
+    }
     case "let": {
       if (s.expr.t === "call") {
         const id = lowerSequencedCall(ctx, s.expr, s.name, s.span);
@@ -775,6 +787,7 @@ function forEachChildBlock(s: Stmt, fn: (block: Stmt[]) => void): void {
 function assignedNames(stmts: Stmt[], out: Set<string> = new Set()): Set<string> {
   for (const s of stmts) {
     if (s.t === "let" || s.t === "assign") out.add(s.name);
+    if (s.t === "destructure") for (const n of s.names) out.add(n);
     forEachChildBlock(s, (b) => assignedNames(b, out));
   }
   return out;
@@ -785,6 +798,7 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
   for (const s of stmts) {
     switch (s.t) {
       case "let": case "assign": exprReads(s.expr, out); break;
+      case "destructure": exprReads(s.value, out); break;
       case "print": exprReads(s.arg, out); break;
       case "stateSet": exprReads(s.value, out); break;
       case "attrSet": exprReads(s.obj, out); exprReads(s.value, out); break;
@@ -857,6 +871,7 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
   for (const s of stmts) {
     switch (s.t) {
       case "let": case "assign": expose(readsOf(s.expr)); killed.add(s.name); break;
+      case "destructure": expose(readsOf(s.value)); s.names.forEach((n) => killed.add(n)); break;
       case "print": expose(readsOf(s.arg)); break;
       case "stateSet": expose(readsOf(s.value)); break;
       case "attrSet": expose(readsOf(s.obj)); expose(readsOf(s.value)); break;

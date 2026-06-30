@@ -46,6 +46,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "attrGet", glyph: "↦", label: "read member" },
   { kind: "attrSet", glyph: "↤", label: "write member" },
   { kind: "indexSet", glyph: "⊐", label: "index write — subscript assign" },
+  { kind: "unpack", glyph: "⇶", label: "unpack — destructuring bind" },
 ];
 
 export interface Theme {
@@ -140,6 +141,8 @@ export const paper: Theme = {
     slice: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // a subscript write shares the collection teal (it writes into a collection).
     indexSet: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    // unpack destructures a sequence value — share the collection teal.
+    unpack: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // state family — one shared indigo hue so attributes + their accessors read
     // as a group, distinct from the flow kinds above.
     state: { fill: "#e6e7fb", stroke: "#4b4fc4" },
@@ -187,6 +190,7 @@ export const ink: Theme = {
     index: { fill: "#10303a", stroke: "#2bb5c9" },
     slice: { fill: "#10303a", stroke: "#2bb5c9" },
     indexSet: { fill: "#10303a", stroke: "#2bb5c9" }, // subscript write — collection teal
+    unpack: { fill: "#10303a", stroke: "#2bb5c9" }, // destructuring bind — collection teal
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },
     stateGet: { fill: "#191b30", stroke: "#7c83e8" },
     stateSet: { fill: "#191b30", stroke: "#7c83e8" },

@@ -234,6 +234,15 @@ export const Node = z.discriminatedUnion("kind", [
   // general subscript-assignment lvalue, round-tripping in both backends
   // (`obj[key] = v`). `label` is always "index".
   z.object({ ...nodeBase, kind: z.literal("indexSet"), label: z.string() }).strict(),
+  // Sequence-unpacking bind: `a, b, … = value` (Python `a, b = value`, TS
+  // `const [a, b] = value`). A control-sequenced node (an assignment is a
+  // statement): control-in/out, one data-in "value" (the sequence), and data-out
+  // "0".."n-1" each carrying element i — read downstream as the corresponding
+  // name in `names`. The value is evaluated ONCE (a single data-in), so unpacking
+  // a call result calls it once — the reason this is a node rather than N
+  // separate `obj[i]` binds. `names` are the target identifiers in order; there
+  // is no `label` (cf. `module`). Round-trips in both backends.
+  z.object({ ...nodeBase, kind: z.literal("unpack"), names: z.array(z.string().min(1)).min(2) }).strict(),
 ]);
 
 /**

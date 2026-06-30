@@ -273,6 +273,14 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "unpack") {
+        // Sequence unpacking: the value (resolved once) destructured into the
+        // bound names; each out-port read resolves back to its name in resolveSrc.
+        stmts.push({ t: "destructure", names: node.names, value: this.resolveInput(node.id, "value") });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "effect") {
         if (node.op === "print") {
           stmts.push({ t: "print", arg: this.resolveInput(node.id, "value") });
@@ -460,6 +468,10 @@ class ModuleCompiler {
     // A try's caught-error binding, read inside its handler.
     if (src.kind === "try" && ep.port === "error") {
       return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // An unpack node's element out-port "i" → the i-th destructured name.
+    if (src.kind === "unpack" && ep.port !== undefined) {
+      return { t: "var", name: src.names[Number(ep.port)] ?? src.id };
     }
     if (this.hasControlIn.has(src.id)) {
       // Sequenced → bound to a local variable earlier in the flow.
