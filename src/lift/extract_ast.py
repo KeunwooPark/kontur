@@ -105,6 +105,8 @@ def expr(e):
             "to": range_stop_to(stop),
             "elem": expr(e.elt),
         }
+    if isinstance(e, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return iter_comp(e)
     if isinstance(e, ast.Call) and call_name(e.func) is not None:
         return {"t": "call", "name": call_name(e.func), "args": [expr(a) for a in e.args]}
     # A method call on a self/local receiver: `recv.method(args)`. The imported-base
@@ -125,6 +127,42 @@ def expr(e):
             raise SystemExit("lift(py): unsupported attribute read on an imported name (package value reference, deferred): " + ast.dump(e))
         return {"t": "attr", "obj": expr(e.value), "name": e.attr}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
+
+
+ITERCOMP_FORM = {
+    ast.ListComp: "list",
+    ast.SetComp: "set",
+    ast.DictComp: "dict",
+    ast.GeneratorExp: "generator",
+}
+
+
+def iter_comp(e):
+    """A comprehension over an arbitrary iterable -> an `itercomp` expr: the
+    value-producing sibling of a `foreach`, covering list/set/dict/generator forms
+    with an optional single `if` filter. Distinct from the counted-range list comp
+    above (which keeps its dedicated `comprehension` node). Multiple generators, a
+    tuple-unpack target (`for k, v in ...`), an `async for`, and more than one filter
+    are each a separate construct, refused loudly and deferred (the unpacking item
+    covers the tuple target)."""
+    if len(e.generators) != 1:
+        raise SystemExit("lift(py): unsupported multi-generator comprehension (deferred)")
+    g = e.generators[0]
+    if getattr(g, "is_async", 0):
+        raise SystemExit("lift(py): unsupported async comprehension (deferred)")
+    if not isinstance(g.target, ast.Name):
+        raise SystemExit("lift(py): unsupported comprehension target (tuple unpacking, deferred to the unpacking item)")
+    if len(g.ifs) > 1:
+        raise SystemExit("lift(py): unsupported comprehension with multiple if-filters (deferred)")
+    out = {"t": "itercomp", "form": ITERCOMP_FORM[type(e)], "varName": g.target.id, "iter": expr(g.iter)}
+    if isinstance(e, ast.DictComp):
+        out["key"] = expr(e.key)
+        out["value"] = expr(e.value)
+    else:
+        out["elem"] = expr(e.elt)
+    if g.ifs:
+        out["cond"] = expr(g.ifs[0])
+    return out
 
 
 def joined_str(e):

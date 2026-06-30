@@ -32,6 +32,12 @@ export type Expr =
   | { t: "array"; elems: Expr[] }
   /** A list comprehension over an inclusive range: `[elem for v in from..to]`. */
   | { t: "comprehension"; varName: string; from: Expr; to: Expr; elem: Expr }
+  /** A comprehension over an arbitrary iterable, building a list/set/dict/generator:
+   *  `[elem for v in iter if cond]`, `{key: value for v in iter}`, `{elem for …}`,
+   *  `(elem for …)`. The iterable sibling of the counted-range `comprehension`.
+   *  `cond` is an optional `if` filter; `key`/`value` are set for the dict form,
+   *  `elem` for the others. */
+  | { t: "itercomp"; form: "list" | "set" | "dict" | "generator"; varName: string; iter: Expr; cond?: Expr; elem?: Expr; key?: Expr; value?: Expr }
   /**
    * A call to a generated function: a helper (stub) or another module. When
    * `external` is set the callee is an imported package symbol — its name is a

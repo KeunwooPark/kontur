@@ -935,6 +935,49 @@ describe.skipIf(!hasPython())("lift: Python list comprehension", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: Python iterable comprehensions (item 11)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a list comprehension over an arbitrary iterable, with an if-filter", () => {
+    const { py } = rt("def f(items: list) -> None:\n    print([(x * 2) for x in items if (x > 0)])\n");
+    expect(py).toContain("[(x * 2) for x in items if (x > 0)]");
+  });
+
+  it("lifts a dict comprehension (the hooks.py shape) and round-trips", () => {
+    const { sys, py } = rt("def default_hooks(hooks: list) -> None:\n    print({event: [] for event in hooks})\n");
+    expect(py).toContain("{event: [] for event in hooks}");
+    // Cross-compiles to a TS Object.fromEntries(map) — a one-way emit.
+    expect(transpile(sys, "ts")).toContain("Object.fromEntries(hooks.map((event) => [event, []]))");
+  });
+
+  it("lifts a set comprehension and round-trips", () => {
+    const { py } = rt("def f(items: list) -> None:\n    print({x for x in items})\n");
+    expect(py).toContain("{x for x in items}");
+  });
+
+  it("lifts a generator expression and round-trips", () => {
+    const { sys, py } = rt("def f(items: list, ok: bool) -> None:\n    print((x for x in items if ok))\n");
+    expect(py).toContain("(x for x in items if ok)");
+    expect(transpile(sys, "ts")).toContain("items.filter((x) => ok).map((x) => x)");
+  });
+
+  it("refuses a multi-generator comprehension (deferred)", () => {
+    expect(() => liftPython("def f(a: list, b: list) -> None:\n    print([(x + y) for x in a for y in b])\n")).toThrow(
+      /multi-generator comprehension/,
+    );
+  });
+
+  it("refuses a tuple-unpacking comprehension target (deferred to the unpacking item)", () => {
+    expect(() => liftPython("def f(d: dict) -> None:\n    print([k for k, v in d])\n")).toThrow(/tuple unpacking/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: Python for-each (collection loop)", () => {
   const SRC = "def print_all(items: list) -> None:\n    for item in items:\n        print(item)\n";
 

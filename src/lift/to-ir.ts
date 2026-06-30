@@ -467,6 +467,27 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       ctx.wires.push([lowerExpr(ctx, e.elem), `${id}:elem`, "data"]);
       return id;
     }
+    case "itercomp": {
+      // The iterable comprehension: the iterable flows in on "iter", the bound
+      // element out on "item" (read by elem/key/value/cond) — the pure-value
+      // sibling of `foreach`. The iterable is evaluated in the enclosing scope, so
+      // it is lowered first; the bound variable is then bound while the body parts
+      // are lowered and restored afterwards so it never leaks past the comprehension.
+      const id = newNode(ctx, { kind: "itercomp", label: e.varName, form: e.form });
+      ctx.wires.push([lowerExpr(ctx, e.iter), `${id}:iter`, "data"]);
+      const prev = ctx.varMap.get(e.varName);
+      ctx.varMap.set(e.varName, `${id}:item`);
+      if (e.form === "dict") {
+        ctx.wires.push([lowerExpr(ctx, e.key!), `${id}:key`, "data"]);
+        ctx.wires.push([lowerExpr(ctx, e.value!), `${id}:value`, "data"]);
+      } else {
+        ctx.wires.push([lowerExpr(ctx, e.elem!), `${id}:elem`, "data"]);
+      }
+      if (e.cond) ctx.wires.push([lowerExpr(ctx, e.cond), `${id}:cond`, "data"]);
+      if (prev === undefined) ctx.varMap.delete(e.varName);
+      else ctx.varMap.set(e.varName, prev);
+      return id;
+    }
     case "call": {
       // A method call in value position (`return obj.foo()`) → a pure method node.
       const m = methodParts(ctx, e);
@@ -738,6 +759,12 @@ function exprReads(e: Expr, out: Set<string>): void {
     case "cond": exprReads(e.cond, out); exprReads(e.then, out); exprReads(e.else, out); break;
     case "array": e.elems.forEach((el) => exprReads(el, out)); break;
     case "comprehension": exprReads(e.from, out); exprReads(e.to, out); exprReads(e.elem, out); break;
+    case "itercomp":
+      exprReads(e.iter, out);
+      if (e.form === "dict") { exprReads(e.key!, out); exprReads(e.value!, out); }
+      else exprReads(e.elem!, out);
+      if (e.cond) exprReads(e.cond, out);
+      break;
     case "attr": exprReads(e.obj, out); break;
     case "call": e.args.forEach((a) => exprReads(a, out)); if (e.recv) exprReads(e.recv, out); break;
     // lit, self, stateGet: no variable reads

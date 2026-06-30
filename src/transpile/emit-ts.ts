@@ -54,6 +54,17 @@ function expr(e: Expr): string {
       const v = camel(e.varName);
       return `Array.from({ length: ${expr(e.to)} - ${expr(e.from)} + 1 }, (_, ${v}) => ${expr(e.elem)})`;
     }
+    case "itercomp": {
+      // TS has no comprehension syntax; cross-compile to a filter/map chain (a
+      // one-way emit, like the range comprehension above). `if` becomes `.filter`,
+      // the element a `.map`; a dict builds entries via `Object.fromEntries`, a set
+      // wraps the mapped array, a generator collapses to the same eager array map.
+      const v = camel(e.varName);
+      const src = e.cond ? `${expr(e.iter)}.filter((${v}) => ${expr(e.cond)})` : expr(e.iter);
+      if (e.form === "dict") return `Object.fromEntries(${src}.map((${v}) => [${expr(e.key!)}, ${expr(e.value!)}]))`;
+      const mapped = `${src}.map((${v}) => ${expr(e.elem!)})`;
+      return e.form === "set" ? `new Set(${mapped})` : mapped;
+    }
     // A method call renders `recv.method(args)` with the method name verbatim; a
     // package call keeps its library API name verbatim (no re-casing, dotted
     // member access preserved); a local helper/stub is cased like any identifier.
