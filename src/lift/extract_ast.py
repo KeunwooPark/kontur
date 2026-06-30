@@ -10,6 +10,9 @@ import sys
 TYPE_MAP = {"int": "int", "float": "float", "str": "string", "bool": "bool"}
 BINOP = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div", ast.Mod: "mod"}
 CMP = {ast.Eq: "eq", ast.NotEq: "ne", ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge"}
+# Prefix unary operators sharing the `un` node: logical `not`, arithmetic `-`/`+`,
+# bitwise `~`. All round-trip through both emitters (`-x`, `+x`, `~x`, `not x`).
+UNARYOP = {ast.Not: "not", ast.USub: "neg", ast.UAdd: "pos", ast.Invert: "bitnot"}
 
 # Local names bound by imports (filled before walking the body). A `base.attr(...)`
 # call is only accepted when `base` is one of these — so a package member call
@@ -75,8 +78,8 @@ def expr(e):
         for v in e.values[1:]:
             cur = {"t": "bin", "op": op, "a": cur, "b": expr(v)}
         return cur
-    if isinstance(e, ast.UnaryOp) and isinstance(e.op, ast.Not):
-        return {"t": "un", "op": "not", "x": expr(e.operand)}
+    if isinstance(e, ast.UnaryOp) and type(e.op) in UNARYOP:
+        return {"t": "un", "op": UNARYOP[type(e.op)], "x": expr(e.operand)}
     if isinstance(e, ast.JoinedStr):
         return joined_str(e)
     if isinstance(e, ast.IfExp):

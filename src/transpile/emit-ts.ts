@@ -9,6 +9,11 @@ const BIN: Partial<Record<Op, string>> = {
   and: "&&", or: "||", concat: "+",
 };
 
+// Prefix unary operators: `!x`, `-x`, `+x`, `~x`.
+const UN: Partial<Record<Op, string>> = {
+  not: "!", neg: "-", pos: "+", bitnot: "~",
+};
+
 function tsType(irType: string): string {
   switch (irType) {
     case "int":
@@ -40,7 +45,7 @@ function expr(e: Expr): string {
     case "attr": return `${expr(e.obj)}.${e.name}`;
     case "stateGet": return `this.${camel(e.attr)}`;
     case "bin": return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
-    case "un": return `(!${expr(e.x)})`;
+    case "un": return `(${UN[e.op]}${expr(e.x)})`;
     case "cond": return `(${expr(e.cond)} ? ${expr(e.then)} : ${expr(e.else)})`;
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
     case "comprehension": {
