@@ -47,6 +47,11 @@ export const WireKind = z.enum(["data", "control"]);
 export const Op = z.enum([
   "add", "sub", "mul", "div", "mod",
   "eq", "ne", "lt", "le", "gt", "ge",
+  // Identity (`is`/`is not`) and membership (`in`/`not in`) comparisons — like the
+  // other comparison ops they sit on pins "a","b". Python round-trips them exactly;
+  // TS has no equivalent, so they cross-compile one-way (identity → `===`/`!==`,
+  // membership → `.includes()`) and the TS lifter never produces them.
+  "is", "isnot", "in", "notin",
   "and", "or", "not",
   // Arithmetic/bitwise unary ops (operand on pin "x"): `-x`, `+x`, `~x`.
   "neg", "pos", "bitnot",

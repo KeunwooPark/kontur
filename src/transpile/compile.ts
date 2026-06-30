@@ -21,6 +21,7 @@ import type { Class as AstClass, Expr, Field, Fn, Program, Stmt } from "./ast.js
 const BINARY_OPS = new Set<Op>([
   "add", "sub", "mul", "div", "mod",
   "eq", "ne", "lt", "le", "gt", "ge",
+  "is", "isnot", "in", "notin",
   "and", "or", "concat",
 ]);
 

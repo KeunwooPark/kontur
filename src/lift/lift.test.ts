@@ -834,6 +834,30 @@ describe.skipIf(!hasPython())("lift: prefix unary operators (-x, +x, ~x) (Python
   });
 });
 
+describe.skipIf(!hasPython())("lift: identity & membership comparisons (is / is not / in / not in) (Python)", () => {
+  it("lifts each comparison and is a round-trip fixed point", () => {
+    // Four comparison ops join eq/ne/lt/…; each rides the `bin` node on pins
+    // "a","b" and re-emits with its Python spelling, so re-lifting is a fixed point.
+    for (const frag of ["x is None", "x is not None", "x in items", "x not in items"]) {
+      const src = ["def f(x: int, items: int) -> bool:", `    return ${frag}`, ""].join("\n");
+      const sys = liftPython(src);
+      expect(validateSystem(sys).ok).toBe(true);
+      const codeA = transpile(sys, "python");
+      expect(codeA).toContain(`return (${frag})`);
+      expect(transpile(liftPython(codeA), "python")).toBe(codeA);
+    }
+  });
+
+  it("cross-compiles identity to ===/!== and membership to .includes() in TS", () => {
+    const mk = (frag: string) =>
+      transpile(liftPython(["def f(x: int, items: int) -> bool:", `    return ${frag}`, ""].join("\n")), "ts");
+    expect(mk("x is None")).toContain("return (x === null);");
+    expect(mk("x is not None")).toContain("return (x !== null);");
+    expect(mk("x in items")).toContain("return (items.includes(x));");
+    expect(mk("x not in items")).toContain("return (!items.includes(x));");
+  });
+});
+
 describe("lift: control & collection constructs round-trip (TS)", () => {
   const cases: { name: string; src: string; expectA: string }[] = [
     {
