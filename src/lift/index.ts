@@ -10,6 +10,8 @@ import { liftProgram } from "./to-ir.js";
 
 export { liftProgram };
 export { parseTypeScript, parsePython };
+export { liftProject, liftDirectory } from "./project.js";
+export type { ProjectOptions, DirectoryResult, SkippedFile } from "./project.js";
 
 export function liftTypeScript(source: string): System {
   return liftProgram(parseTypeScript(source));

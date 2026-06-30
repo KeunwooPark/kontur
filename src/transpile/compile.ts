@@ -24,7 +24,16 @@ const BINARY_OPS = new Set<Op>([
   "and", "or", "concat",
 ]);
 
-export function compile(system: System): Program {
+/**
+ * Lower a System to one neutral `Program`. With `originFilter` given, only the
+ * modules + imports from that source file are emitted (the rest of the System is
+ * still visible, so a cross-file link can resolve its target's contract); this is
+ * how `transpileProject` regenerates one file at a time. Without it, the whole
+ * System is emitted as a single file — the single-file / back-compat path.
+ */
+export function compile(system: System, originFilter?: string): Program {
+  const inFile = (mod: Module): boolean => originFilter === undefined || (mod.origin ?? "") === originFilter;
+
   // A class module's `module`-link nodes are its methods; those method modules
   // are emitted *inside* the class, never again as free functions. Map each
   // method module id → its simple method name (the id is `${classId}.${name}`).
@@ -42,6 +51,7 @@ export function compile(system: System): Program {
   const classes: AstClass[] = [];
   const functions: Fn[] = [];
   for (const [id, mod] of Object.entries(system.modules)) {
+    if (!inFile(mod)) continue;
     if (mod.kind === "class") {
       classes.push(compileClass(id, mod, system, methodName));
     } else if (!methodName.has(id)) {
@@ -50,8 +60,11 @@ export function compile(system: System): Program {
     // else: a method module — emitted within its class above.
   }
   // Imports are reproduced verbatim from the System's fidelity record; the
-  // emitters render the `import` lines (prov is editor-only, dropped here).
-  const imports = (system.imports ?? []).map((i) => ({ source: i.source, bindings: i.bindings }));
+  // emitters render the `import` lines (prov is editor-only, dropped here). When
+  // filtering by file, only that file's own imports are emitted.
+  const imports = (system.imports ?? [])
+    .filter((i) => originFilter === undefined || (i.origin ?? "") === originFilter)
+    .map((i) => ({ source: i.source, bindings: i.bindings }));
   return { functions, classes, imports };
 }
 
@@ -129,7 +142,10 @@ class ModuleCompiler {
       });
     }
 
-    return { name: this.id, params, returns, body };
+    // Emit under the module's bare local name: the project driver qualifies ids
+    // by path (`src/util#format`), but the function declaration uses the bare
+    // name. For single-file lifts the id is already bare, so this is the id.
+    return { name: localName(this.id), params, returns, body };
   }
 
   /** Walk the control chain starting at `target`, producing statements. */
@@ -297,7 +313,13 @@ class ModuleCompiler {
     const args = target.ports
       .filter((p) => p.io === "in" && p.wire === "data")
       .map((p) => this.resolveInput(node.id, p.name));
-    return { t: "call", name: node.ref, args };
+    // Call by the call-site name (`call`) when set — an import alias or a
+    // `ns.member` access — else the target's bare local name. `call` is the exact
+    // source text, so emit it VERBATIM (like a package call): re-casing would
+    // mangle a snake_case alias or a dotted `ns.member` and break the match with
+    // the file's verbatim import line. A bare same-file name is cased normally.
+    if (node.call) return { t: "call", name: node.call, args, external: true };
+    return { t: "call", name: localName(node.ref), args };
   }
 
   /** Gather every data input wired into a node, in wire order (for stub calls). */
@@ -381,6 +403,12 @@ class ModuleCompiler {
   private controlNext(nodeId: string): string | undefined {
     return this.controlWires.find(([from]) => endpointNode(from) === nodeId)?.[1];
   }
+}
+
+/** The bare local name of a (possibly path-qualified) module id: `src/util#format` → `format`. */
+function localName(id: string): string {
+  const hash = id.lastIndexOf("#");
+  return hash === -1 ? id : id.slice(hash + 1);
 }
 
 /** nodeId of an endpoint string, or undefined for a boundary (`P:`) endpoint. */
