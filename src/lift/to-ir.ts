@@ -181,6 +181,7 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
   fn = normalizeReturns(fn);
   fn = { ...fn, body: foldGuards(fn.body) };
   assertNoLoopCarriedState(fn);
+  assertNoTryMerge(fn.body, fn.name);
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
     ...shared, counter: { n: 0 }, returnSource: undefined,
@@ -346,14 +347,20 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // Protected block + handler, rejoining at `done`. The catch binding (if
       // any) is a data-out `error`, bound BEFORE lowering the handler that reads
       // it — exactly like a counted loop's index. The body never sees it.
-      const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "" }, undefined, s.span);
+      const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "", ...(s.errorTypes && s.errorTypes.length ? { errorTypes: s.errorTypes } : {}) }, undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
       const bodyOpen = lowerBlock(ctx, s.body, `${id}:body`);
       if (s.catchParam) ctx.varMap.set(s.catchParam, `${id}:error`);
       const handlerOpen = lowerBlock(ctx, s.handler, `${id}:catch`);
-      // Control reaches `done` only if some path (the body, or the handler) falls
-      // through; if both escape (return/throw), the try is itself terminal.
-      return bodyOpen === null && handlerOpen === null ? null : `${id}:done`;
+      // Optional `else` (runs when the body raised nothing) and `finally` (always
+      // runs) blocks, each lowered into their own control-out region.
+      const elseOpen = s.orelse ? lowerBlock(ctx, s.orelse, `${id}:else`) : undefined;
+      const finallyOpen = s.finalbody ? lowerBlock(ctx, s.finalbody, `${id}:finally`) : undefined;
+      // `finally` (if present) runs last, so it decides fall-through; otherwise the
+      // try falls through unless every path (body/else and handler) escapes.
+      if (finallyOpen !== undefined) return finallyOpen === null ? null : `${id}:done`;
+      const noRaiseOpen = elseOpen !== undefined ? elseOpen : bodyOpen;
+      return noRaiseOpen === null && handlerOpen === null ? null : `${id}:done`;
     }
     case "with": {
       // A context-managed block. The context manager flows in on "context"; the
@@ -411,6 +418,10 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return null;
     }
+    case "pass":
+      // A no-op: no IR node, control flows straight through. An empty block
+      // re-emits `pass` on the way out, so the round-trip holds.
+      return prev;
     case "return":
     case "returnObject": {
       // Multi-exit: a `return` is a TERMINAL control node (control-in, data-in
@@ -730,7 +741,13 @@ function foldNested(s: Stmt): Stmt {
     case "while": return { ...s, body: foldGuards(s.body) };
     case "foreach": return { ...s, body: foldGuards(s.body) };
     case "with": return { ...s, body: foldGuards(s.body) };
-    case "try": return { ...s, body: foldGuards(s.body), handler: foldGuards(s.handler) };
+    case "try": return {
+      ...s,
+      body: foldGuards(s.body),
+      handler: foldGuards(s.handler),
+      ...(s.orelse ? { orelse: foldGuards(s.orelse) } : {}),
+      ...(s.finalbody ? { finalbody: foldGuards(s.finalbody) } : {}),
+    };
     default: return s;
   }
 }
@@ -783,6 +800,41 @@ function assertNoLoopCarriedState(fn: Fn): void {
   walkForLoops(fn.body, fn.name);
 }
 
+/**
+ * Refuse a try whose value escapes via a merge the IR cannot express. When the
+ * body or handler falls through (does not return/throw), a variable assigned in
+ * the body/handler/else and read AFTER the try would need a control-flow merge of
+ * the divergent paths — there is no merge node (same limitation as a branch whose
+ * arms both fall through). A try whose every path escapes, or whose results are
+ * only used inside their own arm, stays supported.
+ */
+function assertNoTryMerge(stmts: Stmt[], fnName: string): void {
+  stmts.forEach((s, i) => {
+    if (s.t === "try") {
+      const fallsThrough = !isTerminal(s.body) || !isTerminal(s.handler) || (s.orelse !== undefined && !isTerminal(s.orelse));
+      if (fallsThrough) {
+        const assigned = assignedNames(s.body);
+        assignedNames(s.handler, assigned);
+        if (s.orelse) assignedNames(s.orelse, assigned);
+        if (assigned.size > 0) {
+          const after = new Set<string>();
+          blockReads(stmts.slice(i + 1), after);
+          for (const name of assigned) {
+            if (after.has(name)) {
+              throw new Error(
+                `lift: function "${fnName}" reads "${name}" after a try whose arms ` +
+                  `both fall through — merging a value across the try/except paths has ` +
+                  `no IR node (only a try whose every path escapes carries a continuation)`,
+              );
+            }
+          }
+        }
+      }
+    }
+    forEachChildBlock(s, (b) => assertNoTryMerge(b, fnName));
+  });
+}
+
 function walkForLoops(stmts: Stmt[], fnName: string): void {
   stmts.forEach((s, i) => {
     if (s.t === "for" || s.t === "foreach" || s.t === "while") {
@@ -818,7 +870,7 @@ function forEachChildBlock(s: Stmt, fn: (block: Stmt[]) => void): void {
   switch (s.t) {
     case "if": fn(s.then); fn(s.else); break;
     case "for": case "while": case "foreach": case "with": fn(s.body); break;
-    case "try": fn(s.body); fn(s.handler); break;
+    case "try": fn(s.body); fn(s.handler); if (s.orelse) fn(s.orelse); if (s.finalbody) fn(s.finalbody); break;
   }
 }
 
@@ -928,7 +980,7 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "foreach": expose(readsOf(s.iter)); nested(s.body, ...(s.names ?? [s.varName])); break;
       case "with": expose(readsOf(s.context)); nested(s.body, s.resource); break;
       case "assert": expose(readsOf(s.cond)); if (s.message) expose(readsOf(s.message)); break;
-      case "try": nested(s.body); nested(s.handler, s.catchParam); break;
+      case "try": nested(s.body); nested(s.handler, s.catchParam); if (s.orelse) nested(s.orelse); if (s.finalbody) nested(s.finalbody); break;
     }
   }
   return exposed;

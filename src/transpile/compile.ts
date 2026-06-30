@@ -224,13 +224,20 @@ class ModuleCompiler {
       }
 
       if (node.kind === "try") {
-        // `label` carries the catch binding name (empty ⇒ no bound variable).
+        // `label` carries the catch binding name (empty ⇒ no bound variable);
+        // `errorTypes` the typed-except type(s); the optional else/finally blocks
+        // are present only when wired.
         const v = identifier(node.label);
+        const elseTarget = this.controlTargetFrom(`${node.id}:else`);
+        const finallyTarget = this.controlTargetFrom(`${node.id}:finally`);
         stmts.push({
           t: "try",
           body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
           ...(v ? { catchParam: v } : {}),
+          ...(node.errorTypes ? { errorTypes: node.errorTypes } : {}),
           handler: this.flowFrom(this.controlTargetFrom(`${node.id}:catch`)),
+          ...(elseTarget !== undefined ? { orelse: this.flowFrom(elseTarget) } : {}),
+          ...(finallyTarget !== undefined ? { finalbody: this.flowFrom(finallyTarget) } : {}),
         });
         cur = this.controlTargetFrom(`${node.id}:done`);
         continue;

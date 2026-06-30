@@ -181,9 +181,25 @@ function stmt(s: Stmt, indent: string): string[] {
     case "try": {
       const out = [`${indent}try {`];
       for (const b of s.body) out.push(...stmt(b, indent + "  "));
-      out.push(s.catchParam ? `${indent}} catch (${camel(s.catchParam)}) {` : `${indent}} catch {`);
+      // A typed handler has no native TS form; cross-compile ONE-WAY to a catch
+      // that re-throws anything not matching the type(s) via `instanceof`. The
+      // `else` block (no native TS form) is emitted inside the catch-free path.
+      if (s.errorTypes && s.errorTypes.length) {
+        const e = s.catchParam ? camel(s.catchParam) : "_e";
+        out.push(`${indent}} catch (${e}) {`);
+        out.push(`${indent}  if (${s.errorTypes.map((t) => `!(${e} instanceof ${t})`).join(" && ")}) throw ${e};`);
+      } else {
+        out.push(s.catchParam ? `${indent}} catch (${camel(s.catchParam)}) {` : `${indent}} catch {`);
+      }
       for (const h of s.handler) out.push(...stmt(h, indent + "  "));
+      if (s.finalbody && s.finalbody.length) {
+        out.push(`${indent}} finally {`);
+        for (const f of s.finalbody) out.push(...stmt(f, indent + "  "));
+      }
       out.push(`${indent}}`);
+      // Python's `else` (runs when the body did not raise) has no TS equivalent;
+      // emit it after the try as a best-effort one-way approximation.
+      if (s.orelse && s.orelse.length) for (const e of s.orelse) out.push(...stmt(e, indent));
       return out;
     }
     case "with": {
@@ -200,6 +216,7 @@ function stmt(s: Stmt, indent: string): string[] {
       // No TS `assert` statement; cross-compile ONE-WAY to `console.assert`.
       return [`${indent}console.assert(${expr(s.cond)}${s.message ? `, ${expr(s.message)}` : ""});`];
     }
+    case "pass": return []; // a no-op; TS blocks may be empty (`{}`)
     case "break": return [`${indent}break;`];
     case "continue": return [`${indent}continue;`];
   }

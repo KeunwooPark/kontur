@@ -435,23 +435,35 @@ def _stmt(s):
             return {"t": "rethrow", "value": {"t": "var", "name": exc.id}}
         raise SystemExit("lift(py): unsupported raise (only `raise <Exception>(message)` or re-raising a value `raise e` is modelled)")
     if isinstance(s, ast.Try):
-        # The IR models a single catch-all handler with no exception type. Refuse
-        # finally/else and multiple/typed handlers rather than silently drop the
-        # type info or non-local control flow we cannot faithfully reproduce.
-        if s.finalbody or s.orelse:
-            raise SystemExit("lift(py): unsupported try/finally or try/else (no IR node)")
+        # A single handler is modelled, optionally TYPED: `except E:` / `except
+        # (A, B):` carry their type name(s) on `errorTypes`; a bare `except:` or
+        # `except Exception:` stays catch-all. `try/else` and `try/finally` are
+        # captured as extra blocks. Several SEPARATE except clauses (distinct types
+        # with distinct bodies) have no single-handler IR home — refused, deferred.
         if len(s.handlers) != 1:
-            raise SystemExit("lift(py): unsupported try with multiple/zero except handlers")
+            raise SystemExit("lift(py): unsupported try with multiple/zero except handlers (deferred)")
         h = s.handlers[0]
-        if not (h.type is None or (isinstance(h.type, ast.Name) and h.type.id == "Exception")):
-            raise SystemExit("lift(py): unsupported typed except (IR catch is catch-all)")
         out = {
             "t": "try",
             "body": [stmt(x) for x in s.body],
             "handler": [stmt(x) for x in h.body],
         }
+        # The caught type(s): a bare `except:` or `except Exception:` is catch-all
+        # (no errorTypes); a (possibly dotted) name, or a tuple of them, is a typed
+        # handler — captured verbatim like a class base / a throw's errorType.
+        if h.type is not None and not (isinstance(h.type, ast.Name) and h.type.id == "Exception"):
+            if dotted_name(h.type) is not None:
+                out["errorTypes"] = [dotted_name(h.type)]
+            elif isinstance(h.type, ast.Tuple) and all(dotted_name(e) is not None for e in h.type.elts):
+                out["errorTypes"] = [dotted_name(e) for e in h.type.elts]
+            else:
+                raise SystemExit("lift(py): unsupported except type (only a name, dotted name, or tuple of them)")
         if h.name:
             out["catchParam"] = h.name
+        if s.orelse:
+            out["orelse"] = [stmt(x) for x in s.orelse]
+        if s.finalbody:
+            out["finalbody"] = [stmt(x) for x in s.finalbody]
         return out
     if isinstance(s, ast.With):
         # A context-managed block `with ctx as r: body`. Only a single context
@@ -467,6 +479,8 @@ def _stmt(s):
                 raise SystemExit("lift(py): unsupported with-target (only a single `as name`, not unpacking)")
             out["resource"] = item.optional_vars.id
         return out
+    if isinstance(s, ast.Pass):
+        return {"t": "pass"}
     if isinstance(s, ast.Break):
         return {"t": "break"}
     if isinstance(s, ast.Continue):

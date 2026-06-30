@@ -103,10 +103,13 @@ export type Stmt = { span?: SourceSpan } & (
   | { t: "foreach"; varName?: string; names?: string[]; iter: Expr; body: Stmt[] }
   /**
    * Protected execution: `try { body } catch (catchParam) { handler }`. The
-   * IR has catch-all semantics (no exception type); `catchParam` is absent when
-   * the source binds no error variable (`catch {}` / bare `except:`).
+   * handler is catch-all unless `errorTypes` names the exception type(s) it
+   * catches (`except ValueError:` → ["ValueError"], `except (A, B):` →
+   * ["A", "B"]); `catchParam` is absent when the source binds no error variable
+   * (`catch {}` / bare `except:`). `orelse` runs when the body raised nothing
+   * (Python `try/else`); `finalbody` always runs on the way out (`finally`).
    */
-  | { t: "try"; body: Stmt[]; catchParam?: string; handler: Stmt[] }
+  | { t: "try"; body: Stmt[]; catchParam?: string; errorTypes?: string[]; handler: Stmt[]; orelse?: Stmt[]; finalbody?: Stmt[] }
   /**
    * A context-managed block: `with context as resource: body` (Python). The
    * context manager `context` is entered, its value bound to `resource` (absent
@@ -146,6 +149,10 @@ export type Stmt = { span?: SourceSpan } & (
   /** Skip to the next iteration of the nearest enclosing loop (`continue`).
    *  Terminal in its block, like `break`. */
   | { t: "continue" }
+  /** A no-op (`pass`). Carries no dataflow or control effect; it exists only so an
+   *  otherwise-empty block is syntactically valid. Dropped at lowering (no IR
+   *  node); an empty block re-emits `pass` on the way out. */
+  | { t: "pass" }
 );
 
 /**

@@ -1396,6 +1396,61 @@ describe.skipIf(!hasPython())("lift: Python while loop (item 16)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: exceptions full — typed except / else / finally (item 20)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a single typed `except E:` and round-trips", () => {
+    const { sys, py } = rt("def f(u: str) -> bool:\n    try:\n        encode(u)\n        return True\n    except UnicodeEncodeError:\n        return False\n");
+    expect(py).toContain("except UnicodeEncodeError:");
+    const tryNode = sys.modules["f"]!.interior.nodes.find((n) => n.kind === "try")!;
+    expect((tryNode as { errorTypes?: string[] }).errorTypes).toEqual(["UnicodeEncodeError"]);
+  });
+
+  it("lifts a tuple `except (A, B):` and round-trips", () => {
+    const { sys, py } = rt("def g(x: int) -> int:\n    try:\n        return parse(x)\n    except (TypeError, AttributeError):\n        return 0\n");
+    expect(py).toContain("except (TypeError, AttributeError):");
+    const tryNode = sys.modules["g"]!.interior.nodes.find((n) => n.kind === "try")!;
+    expect((tryNode as { errorTypes?: string[] }).errorTypes).toEqual(["TypeError", "AttributeError"]);
+  });
+
+  it("lifts a try/finally and round-trips", () => {
+    const { py } = rt("def h(n: int) -> int:\n    try:\n        return risky(n)\n    except Exception as e:\n        log(e)\n        return 0\n    finally:\n        cleanup()\n");
+    expect(py).toContain("finally:");
+    expect(py).toContain("cleanup()");
+  });
+
+  it("lifts a try/else and round-trips", () => {
+    const { py } = rt("def k(n: int) -> None:\n    try:\n        risky(n)\n    except Exception:\n        recover()\n    else:\n        ok(n)\n");
+    expect(py).toContain("else:");
+    expect(py).toContain("ok(n)");
+  });
+
+  it("typed except cross-compiles to a TS instanceof re-throw (one-way)", () => {
+    const sys = liftPython("def f(u: str) -> bool:\n    try:\n        encode(u)\n        return True\n    except UnicodeEncodeError as e:\n        return False\n");
+    expect(transpile(sys, "ts")).toContain("instanceof UnicodeEncodeError");
+  });
+
+  it("refuses a value merged across try/except arms (no merge node)", () => {
+    expect(() => liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except (TypeError, AttributeError):\n        x = True\n    return x\n")).toThrow(/merging a value across the try/);
+  });
+
+  it("refuses multiple separate except clauses (deferred)", () => {
+    expect(() => liftPython("def f(n: int) -> None:\n    try:\n        go(n)\n    except TypeError:\n        a()\n    except ValueError:\n        b()\n")).toThrow(/multiple\/zero except handlers/);
+  });
+
+  it("lifts a dotted except type and a `pass` handler body, round-trips", () => {
+    const { py } = rt("def f(lib: str) -> None:\n    try:\n        load(lib)\n    except (io.UnsupportedOperation, AttributeError):\n        pass\n");
+    expect(py).toContain("except (io.UnsupportedOperation, AttributeError):");
+    expect(py).toContain("pass");
+  });
+});
+
 describe.skipIf(!hasPython())("lift: annotated assignment statement (item 21, slice A)", () => {
   const rt = (src: string) => {
     const sys = liftPython(src);
@@ -1739,13 +1794,22 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(() => liftTypeScript(src)).toThrow(/control-flow merge/);
   });
 
-  it("refuses try/finally (no IR node for finally)", () => {
+  it("lifts try/finally and round-trips from TypeScript (item 20)", () => {
     const src = [
       "export function risky(n: number): void {",
-      "  try { console.log(n); } finally { console.log(0); }",
+      "  try {",
+      "    console.log(n);",
+      "  } catch (e) {",
+      "    console.log(e);",
+      "  } finally {",
+      "    console.log(0);",
+      "  }",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/try\/finally/);
+    const sys = liftTypeScript(src);
+    const ts = transpile(sys, "ts");
+    expect(ts).toContain("} finally {");
+    expect(transpile(liftTypeScript(ts), "ts")).toBe(ts); // fixed point
   });
 
   it("lifts a for-of with a [a, b] destructuring binding (item 14B) and round-trips", () => {
