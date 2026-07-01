@@ -219,22 +219,17 @@ def expr(e):
         return iter_comp(e)
     if isinstance(e, ast.Call) and call_name(e.func) is not None:
         return {"t": "call", "name": call_name(e.func), **call_args(e)}
-    # A method call on a self/local receiver: `recv.method(args)`. The imported-base
-    # case (`pkg.fn(...)`) was taken above via call_name; what remains is a receiver
-    # we model as a value flowing into the call. A bare imported name as the receiver
-    # of a deeper read is a package value reference we do not model yet (see below).
+    # A method call on a receiver: `recv.method(args)`. The direct imported-base call
+    # (`pkg.fn(...)`) was taken above via call_name and tagged EXTERNAL; what remains
+    # is a receiver value flowing into the call — including a DEEPER package member
+    # chain (`os.environ.get(x)`), where the imported base `os` becomes a value
+    # reference (a globalRef, resolved in to-ir) and `os.environ` an attribute read.
     if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute):
-        root = attr_root(e.func.value)
-        if root is not None and root.id in IMPORTED_NAMES:
-            raise SystemExit("lift(py): unsupported call on an imported value (package member chain, deferred): " + ast.dump(e.func))
         return {"t": "call", "name": e.func.attr, **call_args(e), "recv": expr(e.func.value)}
-    # A general attribute read `obj.attr` (self.attr was taken above as stateGet).
-    # A read off an imported name (`sys.maxsize`) is a package value reference with
-    # no receiver wire — a distinct construct, deferred, refused loudly.
+    # A general attribute read `obj.attr` (self.attr was taken above as stateGet). A
+    # read off an imported name (`sys.pypy_version_info`) is a package value reference:
+    # the base `sys` lifts to a value reference (globalRef), and this is an attrGet on it.
     if isinstance(e, ast.Attribute):
-        root = attr_root(e.value)
-        if root is not None and root.id in IMPORTED_NAMES:
-            raise SystemExit("lift(py): unsupported attribute read on an imported name (package value reference, deferred): " + ast.dump(e))
         return {"t": "attr", "obj": expr(e.value), "name": e.attr}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
 

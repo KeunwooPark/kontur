@@ -2340,9 +2340,22 @@ describe.skipIf(!hasPython())("lift: method & attribute access on self/locals (P
     expect(sys.modules["C.f"]!.interior.nodes.some((n) => n.kind === "selfRef")).toBe(true);
   });
 
-  it("refuses an attribute read on an imported name (package value reference)", () => {
+  it("lifts an attribute read on an imported name (package value reference) and round-trips", () => {
     const src = "import sys\ndef f() -> int:\n    return sys.maxsize\n";
-    expect(() => liftPython(src)).toThrow();
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("return sys.maxsize");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("lifts a package member-call chain (os.environ.get) and round-trips", () => {
+    const src = 'import os\ndef f() -> str:\n    return os.environ.get("NETRC")\n';
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain('return os.environ.get("NETRC")');
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 
   it("lifts a bare `return` (void early exit, item 18) and round-trips", () => {
