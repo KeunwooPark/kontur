@@ -682,10 +682,12 @@ def klass(c):
     decorators = decorators_of(c)
     bases = []
     for b in c.bases:
-        name = dotted_name(b)
-        if name is None:
-            raise SystemExit("lift(py): unsupported base class expression (only a name or dotted name is modelled, not e.g. Generic[T])")
-        bases.append(name)
+        # A plain/dotted name (`Base`, `abc.ABC`) is captured as-is; a subscripted
+        # generic base (`Generic[_VT]`, `MutableMapping[str, _VT]`, `dict[str, _VT]`)
+        # is captured VERBATIM via ast.unparse — an opaque type expression the IR
+        # re-emits without analysing, exactly like a decorator. ast.unparse is
+        # idempotent on its own output, so the base round-trips as a fixed point.
+        bases.append(dotted_name(b) or ast.unparse(b))
     fields = []
     methods = []
     doc, body = docstring_of(c.body)

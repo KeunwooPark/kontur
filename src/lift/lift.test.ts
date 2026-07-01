@@ -260,16 +260,29 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
   });
 
   // Item 5 turned positional base classes into real captured IR (see "lift: class
-  // inheritance" below). Keyword bases (metaclass=) and non-name base expressions
-  // (Generic[T]) stay refused — still without an IR home.
+  // inheritance" below). Keyword bases (metaclass=) stay refused — no IR home.
+  // Subscripted generic bases (Generic[T]) are now captured verbatim.
   it("refuses a keyword base (metaclass=)", () => {
     const src = "class C(metaclass=Meta):\n    pass\n";
     expect(() => liftPython(src)).toThrow(/keyword base|metaclass/);
   });
 
-  it("refuses a non-name base expression (Generic[T])", () => {
+  it("captures a subscripted generic base (Generic[T]) verbatim and round-trips", () => {
     const src = "class C(Generic[T]):\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/base class expression/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["C"]!.bases).toEqual(["Generic[T]"]);
+    const a = transpile(sys, "python");
+    expect(a).toContain("class C(Generic[T]):");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("captures mixed dotted + subscripted generic bases and round-trips", () => {
+    const src = "class D(MutableMapping[str, _VT], Generic[_VT]):\n    pass\n";
+    const sys = liftPython(src);
+    expect(sys.modules["D"]!.bases).toEqual(["MutableMapping[str, _VT]", "Generic[_VT]"]);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 });
 
