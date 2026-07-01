@@ -208,6 +208,12 @@ export const Node = z.discriminatedUnion("kind", [
   // one data-out (the constant's value). `label` is the constant name, emitted
   // verbatim; the constant is declared at module scope from `System.consts`.
   z.object({ ...nodeBase, kind: z.literal("globalRef"), label: z.string() }).strict(),
+  // A reference to the ambient receiver as a VALUE — `self`/`this` used as an
+  // expression (passed as an argument, stored, returned). Pure: NO inputs, one
+  // data-out. Distinct from a `method`/`attrGet` whose receiver is `self`: those
+  // model `self` implicitly (no wire); this is `self` standing on its own, e.g.
+  // `Base.__init__(self, …)`. Valid only inside a method. `label` is always "self".
+  z.object({ ...nodeBase, kind: z.literal("selfRef"), label: z.string() }).strict(),
   // Yield a value from a generator. A control-sequenced effect (control-in/out),
   // data-in "value" (absent for a bare `yield`); NOT terminal — a yield suspends
   // and resumes, so control continues. `delegate` marks `yield from` (delegating

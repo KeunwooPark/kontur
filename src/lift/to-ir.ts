@@ -72,6 +72,11 @@ interface Ctx {
   localImports: Map<string, LocalImportTarget>;
   /** simple name → fully-qualified module id (identity when ids are bare). */
   qualify: (name: string) => string;
+  /** Module-scope names usable as a VALUE (a bare identifier not bound locally):
+   *  imported names, sibling classes/functions, module constants, and language
+   *  builtins. An unbound `var` that IS one lowers to a `globalRef` (emitted
+   *  verbatim); one that is NOT is a genuine unbound reference and refuses. */
+  freeNames: Set<string>;
   counter: { n: number };
   returnSource: string | undefined;
   /** The function's data out-port name (fn.returns[0].name), so a `return`
@@ -80,6 +85,30 @@ interface Ctx {
   /** Set when at least one `return`/`returnObject` wired a value to the out-port. */
   returnFired?: boolean;
 }
+
+/**
+ * Language builtins usable as a bare VALUE (an isinstance/type argument, a
+ * default, a stored callback) — not exhaustive, but the ones real code passes
+ * around. A bare name that is one of these (and not bound locally) lowers to a
+ * `globalRef` (emitted verbatim) rather than refusing as unbound. Covers Python
+ * and TS/JS since the lowering is shared.
+ */
+const BUILTINS = new Set<string>([
+  // Python type constructors / core objects used as values
+  "str", "bytes", "bytearray", "int", "float", "complex", "bool", "list", "dict",
+  "tuple", "set", "frozenset", "type", "object", "range", "slice", "memoryview",
+  "property", "staticmethod", "classmethod", "super", "NotImplemented", "Ellipsis",
+  // Common Python exception/warning classes referenced as values
+  "Exception", "BaseException", "ValueError", "TypeError", "KeyError", "IndexError",
+  "AttributeError", "RuntimeError", "StopIteration", "NotImplementedError", "OSError",
+  "IOError", "FileNotFoundError", "UnicodeError", "UnicodeEncodeError", "UnicodeDecodeError",
+  "ArithmeticError", "ZeroDivisionError", "LookupError", "NameError", "ImportError",
+  "Warning", "DeprecationWarning", "UserWarning",
+  // TS / JS global objects & constructors used as values
+  "undefined", "NaN", "Infinity", "Object", "Array", "String", "Number", "Boolean",
+  "Symbol", "BigInt", "Math", "JSON", "Date", "Promise", "RegExp", "Map", "Set",
+  "WeakMap", "WeakSet", "Error", "RangeError", "SyntaxError", "console",
+]);
 
 export function liftProgram(program: Program, lift: LiftContext = {}): System {
   const knownFns = new Set(program.functions.map((f) => f.name));
@@ -105,7 +134,14 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
       }
     }
   }
-  const shared = { knownFns, moduleParams, importSource, localImports, qualify };
+  // Module-scope names that may appear as a bare value: builtins, sibling classes
+  // and functions, module constants, and every imported local name.
+  const freeNames = new Set<string>(BUILTINS);
+  for (const c of program.classes) freeNames.add(c.name);
+  for (const f of program.functions) freeNames.add(f.name);
+  for (const c of program.consts ?? []) freeNames.add(c.name);
+  for (const imp of program.imports ?? []) for (const b of imp.bindings) freeNames.add(b.local);
+  const shared = { knownFns, moduleParams, importSource, localImports, qualify, freeNames };
   const modules: Record<string, Module> = {};
   for (const fn of program.functions) modules[qualify(fn.name)] = lowerFn(fn, shared, lift.origin);
   for (const cls of program.classes) lowerClass(cls, modules, shared, lift.origin);
@@ -140,7 +176,7 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
 }
 
 /** The shared, file-wide resolution state passed to every lowering helper. */
-type Shared = Pick<Ctx, "knownFns" | "moduleParams" | "importSource" | "localImports" | "qualify">;
+type Shared = Pick<Ctx, "knownFns" | "moduleParams" | "importSource" | "localImports" | "qualify" | "freeNames">;
 
 /** The package a call name crosses into, or undefined for a local/builtin call.
  *  The base identifier (`name` before any `.`) is what an import binds. */
@@ -660,14 +696,10 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
     case "stateGet":
       return newNode(ctx, { kind: "stateGet", label: e.attr, attr: e.attr });
     case "self":
-      // `self`/`this` is the ambient method receiver, not a value with a producing
-      // node — it only appears as a method's receiver (handled without a wire) or
-      // the base of `self.attr` (a stateGet). A bare `self` value has no IR source
-      // yet, so refuse it loudly rather than invent one.
-      throw new Error(
-        `lift: a bare "self"/"this" value has no IR representation yet — it is ` +
-          `modelled only as a method receiver or the base of self.attr (example level)`,
-      );
+      // `self`/`this` used as a VALUE (an argument, a stored/returned value) — a
+      // pure `selfRef` source. Distinct from a method receiver or `self.attr` base,
+      // where `self` stays implicit (no wire); here it stands on its own.
+      return newNode(ctx, { kind: "selfRef", label: "self" });
     case "attr": {
       // A general attribute read `obj.attr`: a pure data source whose receiver
       // flows in on pin "obj". Distinct from `member` (a port of a multi-output
@@ -678,8 +710,13 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
     }
     case "var": {
       const ep = ctx.varMap.get(e.name);
-      if (ep === undefined) throw new Error(`lift: unbound variable "${e.name}"`);
-      return ep;
+      if (ep !== undefined) return ep;
+      // Not bound locally: a module-scope free identifier (an imported name, a
+      // sibling class/function, a module constant, a builtin) used as a value →
+      // a `globalRef`, emitted verbatim (the import/definition provides it). A name
+      // that is none of those is a genuine unbound reference — refuse it.
+      if (ctx.freeNames.has(e.name)) return newNode(ctx, { kind: "globalRef", label: e.name });
+      throw new Error(`lift: unbound variable "${e.name}"`);
     }
     case "member": {
       const base = ctx.varMap.get(e.name);

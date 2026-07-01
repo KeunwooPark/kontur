@@ -451,6 +451,8 @@ class ModuleCompiler {
         return { t: "await", value: this.resolveInput(node.id, "x") };
       case "globalRef":
         return { t: "global", name: node.label };
+      case "selfRef":
+        return { t: "self" };
       case "slice": {
         // Each bound is present only when its pin is wired (an absent bound is an
         // open slice end, `obj[:3]` / `obj[1:]`).

@@ -23,7 +23,7 @@ import { derivePins, portId, boundaryPortId, pinKey, type Pin } from "./ports.js
 
 export type NodeKind =
   | "function" | "method" | "branch" | "merge" | "loop" | "while" | "foreach" | "try" | "with" | "assert" | "throw" | "rethrow" | "break" | "continue" | "return" | "yield" | "effect" | "const" | "module"
-  | "select" | "array" | "collection" | "comprehension" | "itercomp" | "index" | "slice" | "await" | "globalRef"
+  | "select" | "array" | "collection" | "comprehension" | "itercomp" | "index" | "slice" | "await" | "globalRef" | "selfRef"
   | "state" | "stateGet" | "stateSet" | "attrGet" | "attrSet" | "indexSet" | "unpack" | "broadcast"
   | "boundary";
 

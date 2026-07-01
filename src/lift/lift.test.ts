@@ -1511,6 +1511,41 @@ describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)"
   });
 });
 
+describe.skipIf(!hasPython())("lift: module-scope free identifiers used as values", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a builtin used as a value (isinstance's type arg) and round-trips", () => {
+    const { py } = rt("def is_text(x: str) -> bool:\n    return isinstance(x, str)\n");
+    expect(py).toContain("isinstance(x, str)");
+  });
+
+  it("lifts an imported name used as a value and round-trips", () => {
+    const { py } = rt("from .compat import builtin_str\ndef check(s: str) -> bool:\n    return isinstance(s, builtin_str)\n");
+    expect(py).toContain("isinstance(s, builtin_str)");
+  });
+
+  it("lifts a sibling class referenced by name and round-trips", () => {
+    const { py } = rt("class Base:\n    pass\ndef make() -> None:\n    register(Base)\n");
+    expect(py).toContain("register(Base)");
+  });
+
+  it("still refuses a genuinely unbound name (not a builtin / module-scope binding)", () => {
+    expect(() => liftPython("def f() -> int:\n    return undefined_thing\n")).toThrow(/unbound variable/);
+  });
+
+  it("dunder methods and acronym class names round-trip verbatim (no re-casing)", () => {
+    const { py } = rt("class HTTPError(IOError):\n    def __init__(self, *args) -> None:\n        super().__init__(*args)\n");
+    expect(py).toContain("class HTTPError(IOError):");
+    expect(py).toContain("def __init__(self, *args)");
+  });
+});
+
 describe.skipIf(!hasPython())("lift: async / await (item 23)", () => {
   it("lifts `async def` + `await` and round-trips (Python); TS emits async", () => {
     const src = "async def fetch_all(urls: list) -> int:\n    return process(await gather(urls))\n";
@@ -2170,9 +2205,14 @@ describe.skipIf(!hasPython())("lift: method & attribute access on self/locals (P
     expect(codeA).toContain("return helper(obj.name())");
   });
 
-  it("refuses a bare `self` value (no IR source yet)", () => {
+  it("lifts a bare `self` value (passed as an argument) via selfRef and round-trips", () => {
     const src = "class C:\n    def f(self) -> None:\n        sink(self)\n";
-    expect(() => transpile(liftPython(src), "python")).toThrow(/bare "self"\/"this"/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("sink(self)");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+    expect(sys.modules["C.f"]!.interior.nodes.some((n) => n.kind === "selfRef")).toBe(true);
   });
 
   it("refuses an attribute read on an imported name (package value reference)", () => {
@@ -2231,9 +2271,14 @@ describe("lift: method & attribute access on self/locals (TS)", () => {
     expect(codeA).toContain("return s.trim().toLowerCase();");
   });
 
-  it("refuses a bare `this` value (no IR source yet)", () => {
+  it("lifts a bare `this` value (passed as an argument) via selfRef and round-trips", () => {
     const src = "export class C {\n  f(): void {\n    sink(this);\n  }\n}\n";
-    expect(() => transpile(liftTypeScript(src), "ts")).toThrow(/bare "self"\/"this"/);
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "ts");
+    expect(a).toContain("sink(this)");
+    expect(transpile(liftTypeScript(a), "ts")).toBe(a); // fixed point
+    expect(sys.modules["C.f"]!.interior.nodes.some((n) => n.kind === "selfRef")).toBe(true);
   });
 });
 
