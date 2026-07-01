@@ -394,33 +394,35 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // (a guard clause — the folded shape foldGuards produces). No merge node.
       if (thenOpen === null) { ctx.varMap = elseVars; return elseOpen; }
       if (elseOpen === null) { ctx.varMap = thenVars; return thenOpen; }
-      // Both arms fall through: a real control-flow merge. Names bound differently
-      // along the two arms become phis (data-in then_v/else_v, data-out v).
+      // Both arms fall through: a control-flow merge. Compute the post-branch binding
+      // of every name touched on either arm. A name bound differently on the two
+      // paths but DEFINED on both (an arm binding, or the pre-branch value on the arm
+      // that didn't touch it) becomes a phi. A name bound on only ONE arm and not
+      // before is arm-local / maybe-unbound — it is left OUT of the continuation, so
+      // a read after it fails honestly as unbound (rather than resolving to one arm's
+      // value on both paths, or over-refusing a value used only within its arm).
+      const merged = new Map(before);
       const phis: string[] = [];
+      const phiSrc: Record<string, [string, string]> = {};
       for (const name of new Set([...thenVars.keys(), ...elseVars.keys()])) {
-        if (thenVars.get(name) !== elseVars.get(name)) phis.push(name);
+        const t = thenVars.get(name);
+        const e = elseVars.get(name);
+        if (t === e) { if (t !== undefined) merged.set(name, t); continue; } // identical on both paths
+        const tSrc = t ?? before.get(name); // value on the then path
+        const eSrc = e ?? before.get(name); // value on the else path
+        if (tSrc === undefined || eSrc === undefined) { merged.delete(name); continue; } // defined on only one path
+        phis.push(name);
+        phiSrc[name] = [tSrc, eSrc];
       }
       const mid = newNode(ctx, { kind: "merge", label: "merge", ...(phis.length ? { phis } : {}) }, undefined, s.span);
       for (const v of phis) {
-        const t = thenVars.get(v);
-        const e = elseVars.get(v);
-        // A name bound on only one arm (never before the branch) is maybe-unbound
-        // on the other path — refuse rather than lift a value that may not exist.
-        if (t === undefined || e === undefined) {
-          throw new Error(
-            `lift: variable "${v}" is assigned on only one arm of a branch and read ` +
-              `after it — it may be unbound on the other path (a merge needs a value ` +
-              `from both arms)`,
-          );
-        }
-        ctx.wires.push([t, `${mid}:then_${v}`, "data"]);
-        ctx.wires.push([e, `${mid}:else_${v}`, "data"]);
+        const [tSrc, eSrc] = phiSrc[v]!;
+        ctx.wires.push([tSrc, `${mid}:then_${v}`, "data"]);
+        ctx.wires.push([eSrc, `${mid}:else_${v}`, "data"]);
       }
       ctx.wires.push([thenOpen, `${mid}:then`, "control"]);
       ctx.wires.push([elseOpen, `${mid}:else`, "control"]);
-      // Continue with the merged bindings: phi vars read the merge out-port; every
-      // other name is identical on both arms, so `thenVars` carries it forward.
-      ctx.varMap = thenVars;
+      ctx.varMap = merged;
       for (const v of phis) ctx.varMap.set(v, `${mid}:${v}`);
       return `${mid}:done`;
     }
@@ -482,18 +484,38 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // it — exactly like a counted loop's index. The body never sees it.
       const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "", ...(s.errorTypes && s.errorTypes.length ? { errorTypes: s.errorTypes } : {}) }, undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
+      // Each region is lowered against its OWN copy of the bindings so an assignment
+      // in the body doesn't leak into the handler (or, after the try, misrepresent a
+      // value that only exists on one path). The continuation carries the SURVIVING
+      // path's bindings — a genuine two-way value merge (both body and handler fall
+      // through and one is read after) is refused up front by assertNoTryMerge.
+      const before = ctx.varMap;
+      ctx.varMap = new Map(before);
       const bodyOpen = lowerBlock(ctx, s.body, `${id}:body`);
+      // `else` runs in the no-raise path, after the body — it sees the body's bindings.
+      const elseOpen = s.orelse ? lowerBlock(ctx, s.orelse, `${id}:else`) : undefined;
+      const noRaiseVars = ctx.varMap; // body (+ else) bindings
+      ctx.varMap = new Map(before);
       if (s.catchParam) ctx.varMap.set(s.catchParam, `${id}:error`);
       const handlerOpen = lowerBlock(ctx, s.handler, `${id}:catch`);
-      // Optional `else` (runs when the body raised nothing) and `finally` (always
-      // runs) blocks, each lowered into their own control-out region.
-      const elseOpen = s.orelse ? lowerBlock(ctx, s.orelse, `${id}:else`) : undefined;
+      const handlerVars = ctx.varMap;
+      // `finally` always runs on the way out; lower it against the pre-try bindings
+      // (conservative — it must not assume either path's assignments) and let it
+      // dominate the continuation.
+      ctx.varMap = new Map(before);
       const finallyOpen = s.finalbody ? lowerBlock(ctx, s.finalbody, `${id}:finally`) : undefined;
-      // `finally` (if present) runs last, so it decides fall-through; otherwise the
-      // try falls through unless every path (body/else and handler) escapes.
-      if (finallyOpen !== undefined) return finallyOpen === null ? null : `${id}:done`;
+      const finallyVars = ctx.varMap;
       const noRaiseOpen = elseOpen !== undefined ? elseOpen : bodyOpen;
-      return noRaiseOpen === null && handlerOpen === null ? null : `${id}:done`;
+      if (finallyOpen !== undefined) {
+        ctx.varMap = finallyVars;
+        return finallyOpen === null ? null : `${id}:done`;
+      }
+      // Set the continuation's bindings to the path that survives (the other escaped).
+      if (noRaiseOpen === null && handlerOpen === null) { ctx.varMap = before; return null; }
+      if (handlerOpen === null) ctx.varMap = noRaiseVars;
+      else if (noRaiseOpen === null) ctx.varMap = handlerVars;
+      else ctx.varMap = noRaiseVars; // both survive: no divergent var is read after (assertNoTryMerge)
+      return `${id}:done`;
     }
     case "with": {
       // A context-managed block. The context manager flows in on "context"; the
@@ -1054,8 +1076,14 @@ function assertNoLoopCarriedState(fn: Fn): void {
 function assertNoTryMerge(stmts: Stmt[], fnName: string): void {
   stmts.forEach((s, i) => {
     if (s.t === "try") {
-      const fallsThrough = !isTerminal(s.body) || !isTerminal(s.handler) || (s.orelse !== undefined && !isTerminal(s.orelse));
-      if (fallsThrough) {
+      // A value merge exists only when BOTH the no-raise path (body, or `else` when
+      // present) AND the handler fall through — then a variable assigned on one path
+      // and read after the try has no single source. If exactly one path escapes
+      // (a guard, e.g. `except: return`), the continuation sees the survivor's
+      // bindings unambiguously — supported (handled in the try lowering).
+      const noRaiseTerminal = s.orelse !== undefined ? isTerminal(s.orelse) : isTerminal(s.body);
+      const bothFallThrough = !noRaiseTerminal && !isTerminal(s.handler);
+      if (bothFallThrough) {
         const assigned = assignedNames(s.body);
         assignedNames(s.handler, assigned);
         if (s.orelse) assignedNames(s.orelse, assigned);

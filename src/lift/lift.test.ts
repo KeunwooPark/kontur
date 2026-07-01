@@ -1593,9 +1593,21 @@ describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)"
   });
 
   it("refuses a value bound on only one arm and read after (maybe-unbound)", () => {
+    // `x` is defined only on the then path; left out of the continuation, so reading
+    // it after the branch fails honestly as unbound (rather than lifting a lie).
     expect(() =>
       liftPython("def f(flag: bool) -> int:\n    if flag:\n        x = 1\n    return x\n"),
-    ).toThrow(/only one arm|may be unbound/);
+    ).toThrow(/unbound variable|only one arm|may be unbound/);
+  });
+
+  it("does NOT treat an arm-local (assigned and used only within one arm) as a phi", () => {
+    // `w` is used only inside the then-arm — it must not become a phi (which would
+    // wrongly demand a value from the empty else). _check_cryptography's shape.
+    const { sys, py } = rt("def f(n: int) -> None:\n    if (n < 5):\n        w = build(n)\n        emit(w)\n    done()\n");
+    const merge = sys.modules["f"]!.interior.nodes.find((mn) => mn.kind === "merge");
+    expect(merge && "phis" in merge ? merge.phis : undefined).toBeUndefined();
+    expect(py).toContain("w = build(n)");
+    expect(py).toContain("done()");
   });
 });
 

@@ -150,8 +150,20 @@ def expr(e):
         return {"t": "index", "obj": expr(e.value), "key": expr(e.slice)}
     if isinstance(e, ast.BinOp) and type(e.op) in BINOP:
         return {"t": "bin", "op": BINOP[type(e.op)], "a": expr(e.left), "b": expr(e.right)}
-    if isinstance(e, ast.Compare) and len(e.ops) == 1 and type(e.ops[0]) in CMP:
-        return {"t": "bin", "op": CMP[type(e.ops[0])], "a": expr(e.left), "b": expr(e.comparators[0])}
+    if isinstance(e, ast.Compare) and all(type(o) in CMP for o in e.ops):
+        # A chained comparison `a <= b < c` desugars to `(a <= b) and (b < c)` — a
+        # source-level fixed point (re-lift sees the `and` form; the `and` chain is
+        # stable). The desugar EVALUATES each middle operand TWICE, so it is refused
+        # unless the middle operands are side-effect-free (never double-run a call).
+        operands = [e.left] + list(e.comparators)
+        for mid in operands[1:-1]:
+            if not is_pure(mid):
+                raise SystemExit("lift(py): unsupported chained comparison with a non-pure middle operand (would double-evaluate a side effect)")
+        terms = [{"t": "bin", "op": CMP[type(o)], "a": expr(operands[i]), "b": expr(operands[i + 1])} for i, o in enumerate(e.ops)]
+        cur = terms[0]
+        for t in terms[1:]:
+            cur = {"t": "bin", "op": "and", "a": cur, "b": t}
+        return cur
     if isinstance(e, ast.BoolOp):
         op = "and" if isinstance(e.op, ast.And) else "or"
         cur = expr(e.values[0])
@@ -675,6 +687,16 @@ def func(f, is_method=False):
     if sp is not None:
         out["span"] = sp
     return out
+
+
+def is_pure(node):
+    """True if evaluating `node` has no observable side effect (safe to duplicate).
+    Conservative: any call / await / yield / walrus / comprehension makes it impure."""
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr,
+                          ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            return False
+    return True
 
 
 def dotted_name(node):
