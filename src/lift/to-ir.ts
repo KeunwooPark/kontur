@@ -222,8 +222,12 @@ function lowerClass(
 }
 
 function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
-  fn = normalizeReturns(fn);
+  // foldGuards runs BEFORE normalizeReturns so a guard clause + trailing return
+  // (`if c: return A` then `return B`) is first folded to `if c: return A else:
+  // return B` and THEN collapsed to a tail `return (A if c else B)` in one pass —
+  // otherwise the ternary only appears on the second transpile (not a fixed point).
   fn = { ...fn, body: foldGuards(fn.body) };
+  fn = normalizeReturns(fn);
   assertNoLoopCarriedState(fn);
   assertNoTryMerge(fn.body, fn.name);
   const ctx: Ctx = {

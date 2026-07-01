@@ -1651,6 +1651,34 @@ describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)"
   });
 });
 
+describe.skipIf(!hasPython())("lift: walrus in an if-condition (hoisted)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+    return { sys, py: a };
+  };
+
+  it("hoists a whole-condition walrus (`if x := e:`) to a preceding assignment", () => {
+    const { py } = rt('def f(jar: object) -> object:\n    if copy_method := getattr(jar, "copy", None):\n        do(copy_method)\n    log()\n');
+    expect(py).toContain('copy_method = getattr(jar, "copy", None)');
+    expect(py).toContain("if copy_method:");
+  });
+
+  it("hoists a walrus in the leftmost operand of a compound condition", () => {
+    const { py } = rt('def f(cookie: object) -> bool:\n    if (value := load(cookie)) is not None and value.startswith("x"):\n        return True\n    return False\n');
+    expect(py).toContain("value = load(cookie)"); // evaluated once, hoisted
+    expect((py.match(/load\(cookie\)/g) ?? []).length).toBe(1);
+  });
+
+  it("refuses a walrus in a short-circuited position (`… and (x := e)`)", () => {
+    expect(() =>
+      liftPython("def f(a: object) -> bool:\n    if a and (b := get()):\n        return True\n    return False\n"),
+    ).toThrow(/short-circuited|walrus/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: module-scope free identifiers used as values", () => {
   const rt = (src: string) => {
     const sys = liftPython(src);

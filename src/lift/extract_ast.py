@@ -340,6 +340,50 @@ def stmts(src):
     return [d for x in src for d in stmt(x)]
 
 
+def hoist_walruses(cond):
+    """Lift walrus assignments (`x := e`) out of a condition. Each walrus in an
+    UNCONDITIONALLY-evaluated position (the whole condition, the leftmost operand of
+    an `and`/`or`, a comparison's left/first-comparator, under a unary op) is hoisted
+    to a preceding `let x = e` and replaced by `x` in the rewritten condition — so
+    `if x := e:` → `x = e; if x:` and `if (v := c) is not None and …:` →
+    `v = c; if v is not None and …:` (a source-level fixed point). A walrus in a
+    short-circuited position (after `and`/`or`, in a ternary branch) is refused —
+    hoisting it would change when its side effect runs. Returns (assign-stmts, cond)."""
+    assigns = []
+
+    def walk(node, safe):
+        if isinstance(node, ast.NamedExpr):
+            if not safe:
+                raise SystemExit("lift(py): unsupported walrus in a short-circuited position (`… and (x := e)`, deferred)")
+            inner = walk(node.value, True)
+            assigns.append({"t": "let", "name": node.target.id, "expr": expr(inner)})
+            return ast.copy_location(ast.Name(id=node.target.id, ctx=ast.Load()), node)
+        if isinstance(node, ast.BoolOp):
+            node.values = [walk(v, safe and i == 0) for i, v in enumerate(node.values)]
+            return node
+        if isinstance(node, ast.IfExp):
+            node.test = walk(node.test, safe)
+            node.body = walk(node.body, False)
+            node.orelse = walk(node.orelse, False)
+            return node
+        if isinstance(node, ast.Compare):
+            node.left = walk(node.left, safe)
+            node.comparators = [walk(c, safe and i == 0) for i, c in enumerate(node.comparators)]
+            return node
+        if isinstance(node, ast.UnaryOp):
+            node.operand = walk(node.operand, safe)
+            return node
+        # Any other position: a walrus nested here is neither clearly safe nor
+        # rewritten, so refuse rather than mis-hoist it.
+        for child in ast.walk(node):
+            if isinstance(child, ast.NamedExpr):
+                raise SystemExit("lift(py): unsupported walrus in an unhandled condition position (deferred)")
+        return node
+
+    new_cond = walk(cond, True)
+    return assigns, new_cond
+
+
 def _stmt(s):
     if (
         isinstance(s, ast.Assign)
@@ -458,12 +502,13 @@ def _stmt(s):
             return {"t": "return"}
         return {"t": "return", "expr": expr(s.value)}
     if isinstance(s, ast.If):
-        return {
+        hoisted, cond = hoist_walruses(s.test)
+        return hoisted + [{
             "t": "if",
-            "cond": expr(s.test),
+            "cond": expr(cond),
             "then": stmts(s.body),
             "else": stmts(s.orelse),
-        }
+        }]
     if isinstance(s, ast.For) and isinstance(s.iter, ast.Call) and isinstance(s.iter.func, ast.Name) and s.iter.func.id == "range":
         args = s.iter.args
         return {
