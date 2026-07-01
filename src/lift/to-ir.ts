@@ -410,6 +410,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
     }
     case "for": {
       const carried = carriedVars(ctx, s.body, [s.varName]);
+      const before = new Map(ctx.varMap);
       const id = newNode(ctx, { kind: "loop", label: s.varName, ...(carried.length ? { carried } : {}) }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.from), `${id}:from`, "data"]);
       ctx.wires.push([lowerExpr(ctx, s.to), `${id}:to`, "data"]);
@@ -418,10 +419,12 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.varMap.set(s.varName, `${id}:index`);
       lowerBlock(ctx, s.body, `${id}:body`);
       bindCarriedOut(ctx, id, carried);
+      restoreLoopScope(ctx, before, carried);
       return `${id}:done`;
     }
     case "while": {
       const carried = carriedVars(ctx, s.body, []);
+      const before = new Map(ctx.varMap);
       const id = newNode(ctx, { kind: "while", label: "while", ...(carried.length ? { carried } : {}) }, undefined, s.span);
       // The condition reads the carried value, so bind carry_v BEFORE lowering it.
       bindCarriedIn(ctx, id, carried);
@@ -429,6 +432,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       lowerBlock(ctx, s.body, `${id}:body`);
       bindCarriedOut(ctx, id, carried);
+      restoreLoopScope(ctx, before, carried);
       return `${id}:done`;
     }
     case "foreach": {
@@ -441,6 +445,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // the "item" port.
       const loopVars = s.names ?? [s.varName!];
       const carried = carriedVars(ctx, s.body, loopVars);
+      const before = new Map(ctx.varMap);
       const node = s.names
         ? { kind: "foreach" as const, label: s.names.join(", "), names: s.names, ...(carried.length ? { carried } : {}) }
         : { kind: "foreach" as const, label: s.varName!, ...(carried.length ? { carried } : {}) };
@@ -452,6 +457,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       else ctx.varMap.set(s.varName!, `${id}:item`);
       lowerBlock(ctx, s.body, `${id}:body`);
       bindCarriedOut(ctx, id, carried);
+      restoreLoopScope(ctx, before, carried);
       return `${id}:done`;
     }
     case "try": {
@@ -598,13 +604,24 @@ function carriedVars(ctx: Ctx, body: Stmt[], loopVars: string[]): string[] {
   return [...topAssigned].filter((v) => exposed.has(v) && !loopVars.includes(v) && ctx.varMap.has(v));
 }
 
-/** Names assigned at the TOP LEVEL of a block (a `let`/`assign`/`destructure`/
- *  `chain` directly in `stmts`, NOT inside a nested branch/loop/try). */
+/** Names rebound at the TOP LEVEL of a block after lowering: a direct
+ *  `let`/`assign`/`destructure`/`chain`, PLUS a name assigned in a top-level `if`
+ *  whose arms do not both escape — a merge (both fall through) phis it, a guard
+ *  (one arm escapes) carries the survivor's, so either becomes a top-level rebind
+ *  once the branch is lowered. This is what lets a CONDITIONAL accumulator
+ *  (`if c: acc = f(acc)`) be a real loop-carried iter-arg rather than a refusal. */
 function topLevelAssignedNames(stmts: Stmt[]): Set<string> {
   const out = new Set<string>();
   for (const s of stmts) {
     if (s.t === "let" || s.t === "assign") out.add(s.name);
-    if (s.t === "destructure" || s.t === "chain") for (const n of s.names) out.add(n);
+    else if (s.t === "destructure" || s.t === "chain") for (const n of s.names) out.add(n);
+    else if (s.t === "if") {
+      const thenT = isTerminal(s.then);
+      const elseT = isTerminal(s.else);
+      if (thenT && elseT) continue; // a terminal branch has no continuation to rebind
+      if (!thenT) for (const n of topLevelAssignedNames(s.then)) out.add(n);
+      if (!elseT) for (const n of topLevelAssignedNames(s.else)) out.add(n);
+    }
   }
   return out;
 }
@@ -622,6 +639,21 @@ function bindCarriedIn(ctx: Ctx, id: string, carried: string[]): void {
 function bindCarriedOut(ctx: Ctx, id: string, carried: string[]): void {
   for (const v of carried) ctx.wires.push([ctx.varMap.get(v)!, `${id}:next_${v}`, "data"]);
   for (const v of carried) ctx.varMap.set(v, `${id}:out_${v}`);
+}
+
+/** Restore the variable scope after a loop: the loop variable and any body-local
+ *  temporaries do NOT escape the loop, so a name bound/rebound inside the body is
+ *  reset to its pre-loop binding (or removed if it had none) — EXCEPT carried vars,
+ *  which survive as "out_v" (set by bindCarriedOut). Without this, a leaked loop
+ *  binding would be misread as a phi by a merge that follows the loop. */
+function restoreLoopScope(ctx: Ctx, before: Map<string, string>, carried: string[]): void {
+  const keep = new Set(carried);
+  for (const name of [...ctx.varMap.keys()]) {
+    if (keep.has(name)) continue;
+    const prev = before.get(name);
+    if (prev === undefined) ctx.varMap.delete(name);
+    else ctx.varMap.set(name, prev);
+  }
 }
 
 /** A call that is sequenced on the control wire: a method, a module link, or a stub. */

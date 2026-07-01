@@ -1462,6 +1462,24 @@ describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)
   it("still refuses a carried-OUT-only var (read after loop, no accumulation)", () => {
     expect(() => liftPython("def f(items: list) -> int:\n    last = 0\n    for x in items:\n        last = score(x)\n    return last\n")).toThrow(/carried out/);
   });
+
+  it("lifts a CONDITIONAL accumulator (updated only inside a branch, read across iterations) via a merge + iter-arg", () => {
+    // dispatch_hook's shape: acc is read each iteration and conditionally updated.
+    const { sys, py } = rt("def run(items: list, acc: int) -> int:\n    for x in items:\n        y = step(acc, x)\n        if ok(y):\n            acc = y\n    return acc\n");
+    const fe = sys.modules["run"]!.interior.nodes.find((n) => n.kind === "foreach")!;
+    expect((fe as { carried?: string[] }).carried).toEqual(["acc"]);
+    expect(py).toContain("if ok(y):");
+    expect(py).toContain("acc = y");
+    // No redundant self-assign for the conditional carry.
+    expect(py).not.toContain("acc = acc\n");
+  });
+
+  it("does not leak a loop variable into a merge that follows the loop", () => {
+    // `x` (loop var) and `t` (body-local) must not escape as phis of the outer if.
+    const { py } = rt("def f(flag: bool, items: list, acc: int) -> int:\n    if flag:\n        for x in items:\n            t = step(acc, x)\n            if ok(t):\n                acc = t\n    return acc\n");
+    expect(py).toContain("for x in items:");
+    expect(py).toContain("return acc");
+  });
 });
 
 describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)", () => {

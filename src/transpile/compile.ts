@@ -523,9 +523,17 @@ class ModuleCompiler {
   }
 
   /** Loop-carried accumulator update, appended to the loop body: `v = <next_v
-   *  source>` (e.g. `total = (total + x)`). */
+   *  source>` (e.g. `total = (total + x)`). A redundant `v = v` is dropped — a
+   *  CONDITIONAL accumulator already reassigns `v` inside the body (via a branch
+   *  merge), so its `next_v` is just `v` and needs no trailing self-assign. */
   private carriedUpdate(node: Extract<Node, { kind: "loop" | "while" | "foreach" }>): Stmt[] {
-    return (node.carried ?? []).map((v) => ({ t: "assign", name: v, expr: this.resolveInput(node.id, `next_${v}`) }));
+    const out: Stmt[] = [];
+    for (const v of node.carried ?? []) {
+      const expr = this.resolveInput(node.id, `next_${v}`);
+      if (expr.t === "var" && expr.name === v) continue;
+      out.push({ t: "assign", name: v, expr });
+    }
+    return out;
   }
 
   /** A stub/method node's positional args: data wires into its BARE endpoint, in
