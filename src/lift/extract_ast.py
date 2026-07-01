@@ -322,12 +322,22 @@ def range_stop_to(stop):
 
 
 def stmt(s):
-    """Lower a statement and stamp its source span (provenance) onto the result."""
-    d = _stmt(s)
+    """Lower a source statement to ONE OR MORE neutral statements (a construct like
+    a chained lvalue assignment or a statement-level walrus desugars to several) and
+    stamp the source span (provenance) on each."""
+    ds = _stmt(s)
+    if not isinstance(ds, list):
+        ds = [ds]
     sp = span(s)
     if sp is not None:
-        d["span"] = sp
-    return d
+        for d in ds:
+            d.setdefault("span", sp)
+    return ds
+
+
+def stmts(src):
+    """Lower a list of source statements, flattening any that desugar to several."""
+    return [d for x in src for d in stmt(x)]
 
 
 def _stmt(s):
@@ -347,7 +357,33 @@ def _stmt(s):
     if isinstance(s, ast.Assign) and len(s.targets) > 1:
         if all(isinstance(t, ast.Name) for t in s.targets):
             return {"t": "chain", "names": [t.id for t in s.targets], "value": expr(s.value)}
-        raise SystemExit("lift(py): unsupported chained assignment target (only plain names)")
+        # Mixed chain `a = obj.attr = d[k] = value`: evaluate the value ONCE into the
+        # first plain-name target, then assign every other target (name / attr /
+        # subscript lvalue) from that holder — a source-level fixed point (re-lift
+        # sees the desugared statements). An all-lvalue chain (no name to hold the
+        # value once) is refused.
+        holders = [t.id for t in s.targets if isinstance(t, ast.Name)]
+        if not holders:
+            raise SystemExit("lift(py): unsupported chained assignment with no plain-name target (deferred)")
+        holder = holders[0]
+        held = {"t": "var", "name": holder}
+        out = [{"t": "let", "name": holder, "expr": expr(s.value)}]
+        for t in s.targets:
+            if isinstance(t, ast.Name):
+                if t.id != holder:
+                    out.append({"t": "assign", "name": t.id, "expr": held})
+            elif isinstance(t, ast.Attribute):
+                if isinstance(t.value, ast.Name) and t.value.id == "self":
+                    out.append({"t": "stateSet", "attr": t.attr, "value": held})
+                else:
+                    out.append({"t": "attrSet", "obj": expr(t.value), "attr": t.attr, "value": held})
+            elif isinstance(t, ast.Subscript):
+                if isinstance(t.slice, ast.Slice):
+                    raise SystemExit("lift(py): unsupported slice-assignment target in a chain (deferred)")
+                out.append({"t": "indexSet", "obj": expr(t.value), "key": expr(t.slice), "value": held})
+            else:
+                raise SystemExit("lift(py): unsupported chained assignment target")
+        return out
     # Sequence unpacking `a, b = value` (a tuple/list target). Each name binds to
     # the corresponding element of `value` -> a `destructure` (the `unpack` node).
     # Only plain names are modelled: a starred target (`a, *rest = …`) or a nested
@@ -425,8 +461,8 @@ def _stmt(s):
         return {
             "t": "if",
             "cond": expr(s.test),
-            "then": [stmt(x) for x in s.body],
-            "else": [stmt(x) for x in s.orelse],
+            "then": stmts(s.body),
+            "else": stmts(s.orelse),
         }
     if isinstance(s, ast.For) and isinstance(s.iter, ast.Call) and isinstance(s.iter.func, ast.Name) and s.iter.func.id == "range":
         args = s.iter.args
@@ -435,14 +471,14 @@ def _stmt(s):
             "varName": s.target.id,
             "from": expr(args[0]),
             "to": range_stop_to(args[1]),
-            "body": [stmt(x) for x in s.body],
+            "body": stmts(s.body),
         }
     if isinstance(s, ast.While):
         # A condition-driven loop. The IR `while` node carries only a predicate;
         # a `while...else` is control flow with no IR node, refused rather than dropped.
         if s.orelse:
             raise SystemExit("lift(py): unsupported while/else (no IR node for the else clause)")
-        return {"t": "while", "cond": expr(s.test), "body": [stmt(x) for x in s.body]}
+        return {"t": "while", "cond": expr(s.test), "body": stmts(s.body)}
     if isinstance(s, ast.For):
         # A non-range `for x in iter:` is a collection-driven loop (foreach). A
         # single Name target binds `varName`; a tuple/list target (`for k, v in …`)
@@ -450,7 +486,7 @@ def _stmt(s):
         # no IR node, so refuse it rather than drop it.
         if s.orelse:
             raise SystemExit("lift(py): unsupported for/else (no IR node for the else clause)")
-        out = {"t": "foreach", "iter": expr(s.iter), "body": [stmt(x) for x in s.body]}
+        out = {"t": "foreach", "iter": expr(s.iter), "body": stmts(s.body)}
         if isinstance(s.target, ast.Name):
             out["varName"] = s.target.id
         else:
@@ -504,8 +540,8 @@ def _stmt(s):
         h = s.handlers[0]
         out = {
             "t": "try",
-            "body": [stmt(x) for x in s.body],
-            "handler": [stmt(x) for x in h.body],
+            "body": stmts(s.body),
+            "handler": stmts(h.body),
         }
         # The caught type(s): a bare `except:` or `except Exception:` is catch-all
         # (no errorTypes); a (possibly dotted) name, or a tuple of them, is a typed
@@ -520,9 +556,9 @@ def _stmt(s):
         if h.name:
             out["catchParam"] = h.name
         if s.orelse:
-            out["orelse"] = [stmt(x) for x in s.orelse]
+            out["orelse"] = stmts(s.orelse)
         if s.finalbody:
-            out["finalbody"] = [stmt(x) for x in s.finalbody]
+            out["finalbody"] = stmts(s.finalbody)
         return out
     if isinstance(s, ast.With):
         # A context-managed block `with ctx as r: body`. Only a single context
@@ -532,7 +568,7 @@ def _stmt(s):
         if len(s.items) != 1:
             raise SystemExit("lift(py): unsupported with multiple context managers (`with a, b:`, deferred)")
         item = s.items[0]
-        out = {"t": "with", "context": expr(item.context_expr), "body": [stmt(x) for x in s.body]}
+        out = {"t": "with", "context": expr(item.context_expr), "body": stmts(s.body)}
         if item.optional_vars is not None:
             if not isinstance(item.optional_vars, ast.Name):
                 raise SystemExit("lift(py): unsupported with-target (only a single `as name`, not unpacking)")
@@ -694,7 +730,7 @@ def func(f, is_method=False):
     params = params_of(f, is_method)
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
     doc, body = docstring_of(f.body)
-    out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in body]}
+    out = {"name": f.name, "params": params, "returns": returns, "body": stmts(body)}
     if decorators:
         out["decorators"] = decorators
     if doc is not None:

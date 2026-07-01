@@ -1389,6 +1389,15 @@ describe.skipIf(!hasPython())("lift: tuple unpacking assignment (item 14, Python
     expect(transpile(sys, "ts")).toContain("let y = x;");
   });
 
+  it("lifts a chained assignment with a mixed lvalue target (name + subscript) and round-trips", () => {
+    // `manager = self.proxy_manager[proxy] = build(proxy)` — the value is evaluated
+    // once into the name holder, then the subscript lvalue is set from it.
+    const { py } = rt("class A:\n    def connect(self, proxy: str) -> object:\n        manager = self.proxy_manager[proxy] = build(proxy)\n        return manager\n");
+    expect((py.match(/build\(proxy\)/g) ?? []).length).toBe(1); // evaluated once
+    expect(py).toContain("manager = build(proxy)");
+    expect(py).toContain("self.proxy_manager[proxy] = manager");
+  });
+
   it("refuses a starred unpack target `a, *rest = xs` (deferred)", () => {
     expect(() => liftPython("def g(xs: list) -> int:\n    a, *rest = xs\n    return a\n")).toThrow(/starred unpack/);
   });
