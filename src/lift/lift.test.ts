@@ -422,6 +422,29 @@ describe.skipIf(!hasPython())("lift: classes (Python)", () => {
   });
 });
 
+describe.skipIf(!hasPython())("lift: @overload stubs and `...` placeholder bodies", () => {
+  it("drops @overload stubs (type-only, erased at runtime) keeping the real method, and round-trips", () => {
+    const src = "class D(dict):\n    @overload\n    def get(self, key: str) -> int: ...\n    @overload\n    def get(self, key: str, default: int) -> int: ...\n    def get(self, key: str, default: int = None) -> int:\n        return default\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    // Exactly one `get` method survives (no duplicate-id collision).
+    expect(Object.keys(sys.modules).filter((k) => k.endsWith("D.get")).length).toBe(1);
+    const a = transpile(sys, "python");
+    expect(a).not.toContain("@overload");
+    expect(a).toContain("def get(self, key: str, default: int = None) -> int:");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("tolerates a bare `...` placeholder body (emits pass) and round-trips", () => {
+    const src = "class P:\n    def m(self) -> int: ...\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("pass");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+});
+
 describe.skipIf(!hasPython())("lift: class inheritance (Python)", () => {
   it("captures a single base class onto the class module and round-trips", () => {
     const src = [
