@@ -283,18 +283,27 @@ def joined_str(e):
     template literal (see `liftTemplate` in ast-from-ts.ts). The IR has no
     interpolation node; `concat` is the string-join effect, emitted as `+` by each
     backend. Empty fixed parts are dropped so the chain carries only text-producing
-    pieces; an f-string with no parts is the empty string. A conversion (`{x!r}`)
-    or a format spec (`{x:.2f}`) carries formatting that `concat` cannot represent,
-    so refuse it loudly rather than silently drop it."""
+    pieces; an f-string with no parts is the empty string. A conversion (`{x!r}` /
+    `{x!s}` / `{x!a}`) desugars to the matching builtin call (`repr(x)` / `str(x)` /
+    `ascii(x)`); a format spec (`{x:08x}`) desugars to `format(x, "08x")`. Both are
+    source-level fixed points (the desugared call re-lifts unchanged), so the whole
+    f-string collapses to a `concat` chain over text and these calls."""
+    conv_fn = {114: "repr", 115: "str", 97: "ascii"}  # ord('r'/'s'/'a')
     parts = []
     for v in e.values:
         if isinstance(v, ast.Constant):
             if v.value != "":
                 parts.append({"t": "lit", "value": v.value})
         elif isinstance(v, ast.FormattedValue):
-            if v.conversion != -1 or v.format_spec is not None:
-                raise SystemExit("lift(py): unsupported f-string conversion/format spec (e.g. {x!r} / {x:.2f}; not representable as concat)")
-            parts.append(expr(v.value))
+            piece = expr(v.value)
+            # A `!r`/`!s`/`!a` conversion wraps the value in repr()/str()/ascii().
+            if v.conversion != -1:
+                piece = {"t": "call", "name": conv_fn[v.conversion], "args": [piece]}
+            # A `:spec` format spec wraps in format(value, spec); the spec is itself
+            # an f-string (usually a constant), lifted the same way.
+            if v.format_spec is not None:
+                piece = {"t": "call", "name": "format", "args": [piece, joined_str(v.format_spec)]}
+            parts.append(piece)
         else:
             raise SystemExit("lift(py): unsupported f-string part: " + ast.dump(v))
     if not parts:

@@ -794,13 +794,19 @@ describe.skipIf(!hasPython())("lift: f-strings lower to the concat op (Python)",
     expect(transpile(liftPython(SRC), "ts")).toContain('return ("value=" + x);');
   });
 
-  it("refuses an f-string conversion / format spec (not representable as concat)", () => {
-    expect(() => liftPython(['def g(x: int) -> str:', '    return f"{x:.2f}"', ""].join("\n"))).toThrow(
-      /format spec|conversion/,
-    );
-    expect(() => liftPython(['def g(x: int) -> str:', '    return f"{x!r}"', ""].join("\n"))).toThrow(
-      /format spec|conversion/,
-    );
+  it("lifts an f-string conversion (!r/!s/!a) to a repr/str/ascii call and round-trips", () => {
+    const sys = liftPython('def g(u: str) -> str:\n    return f"({u!r})"\n');
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain('return (("(" + repr(u)) + ")")');
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("lifts an f-string format spec (:08x) to a format(value, spec) call and round-trips", () => {
+    const sys = liftPython('def g(n: int) -> str:\n    return f"{n:08x}"\n');
+    const a = transpile(sys, "python");
+    expect(a).toContain('return format(n, "08x")');
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 });
 
