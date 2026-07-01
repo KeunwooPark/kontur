@@ -118,6 +118,15 @@ export const Node = z.discriminatedUnion("kind", [
   // positional args stay on the bare endpoint. Absent ⇒ a positional-only call.
   z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
+  // A control-flow merge — the join point after a `branch` whose two arms both
+  // fall through (neither escapes via return/throw). Control-in "then" and "else"
+  // are where each arm's chain converges; control-out "done" continues after the
+  // branch. This is the piece that lets straight-line code follow an if/else.
+  // For each phi variable `v` in `phis`, data-in "then_v"/"else_v" carry the value
+  // `v` held along each arm and data-out "v" is the merged value read downstream —
+  // the SSA φ. A merge with no `phis` is a pure control join (a conditional effect
+  // after which control simply continues). `label` is always "merge".
+  z.object({ ...nodeBase, kind: z.literal("merge"), label: z.string(), phis: z.array(z.string().min(1)).min(1).optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string(), carried: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
   // The counted `loop` carries from/to/index; a `while` carries only a predicate.

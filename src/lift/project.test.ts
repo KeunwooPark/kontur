@@ -186,8 +186,8 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
 
   it("skips an unsupported file loudly and degrades a call into it to a stub (no dangling link)", () => {
     const root = writeProject({
-      // Out of subset: a post-branch control-flow merge → lift rejects it.
-      "bad.ts": "export function bad(n: number): void {\n  if (n < 0) {\n    console.log(0);\n  }\n  console.log(n);\n}\n",
+      // Out of subset: a loop-carried-out variable (read after the loop) → lift rejects it.
+      "bad.ts": "export function bad(items: number[]): number {\n  let last = 0;\n  for (const x of items) {\n    last = score(x);\n  }\n  return last;\n}\n",
       "main.ts": [
         'import { bad } from "./bad";',
         "",

@@ -325,9 +325,52 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       const id = newNode(ctx, { kind: "branch", label: "branch" }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
       ctx.wires.push([prev, id, "control"]);
-      lowerBlock(ctx, s.then, `${id}:then`);
-      lowerBlock(ctx, s.else, `${id}:else`);
-      return null; // branch arms are terminal
+      // Each arm is lowered against its OWN copy of the variable bindings — a
+      // reassignment in one arm must not leak into the other (or, before the
+      // merge, into the continuation). Snapshot, lower `then`, capture its map;
+      // reset, lower `else`, capture its map.
+      const before = ctx.varMap;
+      ctx.varMap = new Map(before);
+      const thenOpen = lowerBlock(ctx, s.then, `${id}:then`);
+      const thenVars = ctx.varMap;
+      ctx.varMap = new Map(before);
+      const elseOpen = lowerBlock(ctx, s.else, `${id}:else`);
+      const elseVars = ctx.varMap;
+      // Both arms escape (return/throw/…): the branch is terminal, nothing merges.
+      if (thenOpen === null && elseOpen === null) { ctx.varMap = before; return null; }
+      // Exactly one arm escapes: the surviving arm's bindings ARE the continuation
+      // (a guard clause — the folded shape foldGuards produces). No merge node.
+      if (thenOpen === null) { ctx.varMap = elseVars; return elseOpen; }
+      if (elseOpen === null) { ctx.varMap = thenVars; return thenOpen; }
+      // Both arms fall through: a real control-flow merge. Names bound differently
+      // along the two arms become phis (data-in then_v/else_v, data-out v).
+      const phis: string[] = [];
+      for (const name of new Set([...thenVars.keys(), ...elseVars.keys()])) {
+        if (thenVars.get(name) !== elseVars.get(name)) phis.push(name);
+      }
+      const mid = newNode(ctx, { kind: "merge", label: "merge", ...(phis.length ? { phis } : {}) }, undefined, s.span);
+      for (const v of phis) {
+        const t = thenVars.get(v);
+        const e = elseVars.get(v);
+        // A name bound on only one arm (never before the branch) is maybe-unbound
+        // on the other path — refuse rather than lift a value that may not exist.
+        if (t === undefined || e === undefined) {
+          throw new Error(
+            `lift: variable "${v}" is assigned on only one arm of a branch and read ` +
+              `after it — it may be unbound on the other path (a merge needs a value ` +
+              `from both arms)`,
+          );
+        }
+        ctx.wires.push([t, `${mid}:then_${v}`, "data"]);
+        ctx.wires.push([e, `${mid}:else_${v}`, "data"]);
+      }
+      ctx.wires.push([thenOpen, `${mid}:then`, "control"]);
+      ctx.wires.push([elseOpen, `${mid}:else`, "control"]);
+      // Continue with the merged bindings: phi vars read the merge out-port; every
+      // other name is identical on both arms, so `thenVars` carries it forward.
+      ctx.varMap = thenVars;
+      for (const v of phis) ctx.varMap.set(v, `${mid}:${v}`);
+      return `${mid}:done`;
     }
     case "for": {
       const carried = carriedVars(ctx, s.body, [s.varName]);
@@ -823,10 +866,11 @@ function normalizeReturns(fn: Fn): Fn {
  *
  * A branch escapes control when an arm is *terminal* (ends in a `throw`, or in a
  * nested all-terminal branch). When exactly one arm escapes, the trailing
- * statements are the continuation of the OTHER arm — there is no post-branch
- * merge point in the graph, so they belong inside it. When NEITHER arm escapes
- * yet code follows the branch, that is a real merge the IR cannot express: we
- * refuse it loudly rather than silently drop the tail (manifesto: never lie).
+ * statements are the continuation of the OTHER arm — folding them into it keeps
+ * the guard-clause shape a source fixed point (`if bad: throw; rest` ⟶
+ * `if bad: throw else: rest`). When NEITHER arm escapes, the trailing statements
+ * are a real control-flow merge — left in place for the lowering to represent with
+ * a `merge` node (both arms rejoin, phi-ing any value assigned differently).
  */
 function foldGuards(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
@@ -834,19 +878,13 @@ function foldGuards(stmts: Stmt[]): Stmt[] {
     const s = foldNested(stmts[i]!);
     const rest = stmts.slice(i + 1);
     if (s.t === "if" && rest.length > 0) {
-      const folded = foldGuards(rest);
       const thenEscapes = isTerminal(s.then);
       const elseEscapes = isTerminal(s.else);
-      if (thenEscapes && !elseEscapes) { out.push({ ...s, else: [...s.else, ...folded] }); return out; }
-      if (elseEscapes && !thenEscapes) { out.push({ ...s, then: [...s.then, ...folded] }); return out; }
-      if (!thenEscapes && !elseEscapes) {
-        throw new Error(
-          `lift: statements follow a branch whose arms both fall through — a ` +
-            `control-flow merge has no IR node (only a guarding branch, where one ` +
-            `arm escapes via throw, may carry a continuation)`,
-        );
-      }
-      // both arms escape ⇒ the tail is unreachable; leave it (dropped at lowering).
+      if (thenEscapes && !elseEscapes) { out.push({ ...s, else: [...s.else, ...foldGuards(rest)] }); return out; }
+      if (elseEscapes && !thenEscapes) { out.push({ ...s, then: [...s.then, ...foldGuards(rest)] }); return out; }
+      // both arms escape ⇒ the tail is unreachable (dropped at lowering); both fall
+      // through ⇒ a merge (handled at lowering). Either way, keep the branch and let
+      // the trailing statements follow it as ordinary siblings.
     }
     out.push(s);
   }

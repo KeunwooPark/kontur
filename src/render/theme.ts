@@ -24,6 +24,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "function", glyph: "ƒ", label: "function" },
   { kind: "method", glyph: "⟜", label: "method call" },
   { kind: "branch", glyph: "◆", label: "branch" },
+  { kind: "merge", glyph: "◇", label: "merge — branch join / φ" },
   { kind: "loop", glyph: "↻", label: "loop" },
   { kind: "while", glyph: "⟲", label: "while loop" },
   { kind: "foreach", glyph: "∈", label: "for-each loop" },
@@ -130,6 +131,7 @@ export const paper: Theme = {
     function: { fill: "#e4eff7", stroke: "#0072b2" }, // blue
     method: { fill: "#e4eff7", stroke: "#0072b2" }, // blue — a call, like function
     branch: { fill: "#fbf1da", stroke: "#e69f00" }, // amber
+    merge: { fill: "#f5ecd6", stroke: "#b07d10" }, // deeper amber — the branch join (φ)
     loop: { fill: "#f7e7f0", stroke: "#cc79a7" }, // reddish purple
     while: { fill: "#e3f1fb", stroke: "#56b4e9" }, // sky blue — the other loop
     foreach: { fill: "#eef6e2", stroke: "#5a9216" }, // olive green — the collection loop
@@ -191,6 +193,7 @@ export const ink: Theme = {
     function: { fill: "#16263f", stroke: "#4f8cf0" },
     method: { fill: "#16263f", stroke: "#4f8cf0" }, // a call, like function
     branch: { fill: "#3a2a12", stroke: "#e0a13a" },
+    merge: { fill: "#33260f", stroke: "#c99433" }, // deeper amber — the branch join (φ)
     loop: { fill: "#2a1c3d", stroke: "#a878e8" },
     while: { fill: "#13283a", stroke: "#56b4e9" },
     foreach: { fill: "#1c2f12", stroke: "#7fb84a" },

@@ -1464,6 +1464,53 @@ describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)
   });
 });
 
+describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const mergeOf = (sys: ReturnType<typeof liftPython>, fn: string) =>
+    sys.modules[fn]!.interior.nodes.find((n) => n.kind === "merge");
+
+  it("lifts a pure control merge (conditional effect, then continue) and round-trips", () => {
+    const { sys, py } = rt("def g(n: int) -> None:\n    if (n < 0):\n        print(0)\n    print(n)\n");
+    expect(mergeOf(sys, "g")).toBeDefined();
+    expect((mergeOf(sys, "g") as { phis?: string[] }).phis).toBeUndefined();
+    expect(py).toContain("if (n < 0):");
+    expect(py).toContain("print(n)");
+  });
+
+  it("lifts a data-merge φ (value assigned in both arms, read after) and round-trips", () => {
+    const { sys, py } = rt("def pick(flag: bool, a: str, b: str) -> str:\n    if flag:\n        out = a\n    else:\n        out = b\n    return out\n");
+    expect((mergeOf(sys, "pick") as { phis?: string[] }).phis).toEqual(["out"]);
+    expect(py).toContain("out = a");
+    expect(py).toContain("out = b");
+    expect(py).toContain("return out");
+  });
+
+  it("lifts a one-armed φ (empty else keeps the pre-branch value) and round-trips", () => {
+    // `hook_list = [hook_list]` inside a guard, read after — dispatch_hook's shape.
+    const { sys, py } = rt("def h(x: int, flag: bool) -> int:\n    y = x\n    if flag:\n        y = (x + 1)\n    return y\n");
+    expect((mergeOf(sys, "h") as { phis?: string[] }).phis).toEqual(["y"]);
+    expect(py).toContain("y = (x + 1)");
+    expect(py).toContain("return y");
+  });
+
+  it("mirrors to_native_string (isinstance branch → φ on `out`) and round-trips", () => {
+    const { sys } = rt('def to_native(string: str, encoding: str) -> str:\n    if is_str(string):\n        out = string\n    else:\n        out = decode(string, encoding)\n    return out\n');
+    expect((mergeOf(sys, "to_native") as { phis?: string[] }).phis).toEqual(["out"]);
+  });
+
+  it("refuses a value bound on only one arm and read after (maybe-unbound)", () => {
+    expect(() =>
+      liftPython("def f(flag: bool) -> int:\n    if flag:\n        x = 1\n    return x\n"),
+    ).toThrow(/only one arm|may be unbound/);
+  });
+});
+
 describe.skipIf(!hasPython())("lift: async / await (item 23)", () => {
   it("lifts `async def` + `await` and round-trips (Python); TS emits async", () => {
     const src = "async def fetch_all(urls: list) -> int:\n    return process(await gather(urls))\n";
@@ -1964,7 +2011,9 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(() => liftTypeScript(src)).toThrow(/unsupported throw/);
   });
 
-  it("refuses a post-branch merge (statements after a non-escaping branch)", () => {
+  it("lifts a post-branch control merge (statements after a non-escaping branch) and round-trips (TS)", () => {
+    // A branch whose arms both fall through, followed by more code, is a control
+    // merge — now represented by a `merge` node (was refused before).
     const src = [
       "export function f(n: number): void {",
       "  if ((n < 0)) {",
@@ -1973,7 +2022,32 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
       "  console.log(n);",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/control-flow merge/);
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toBe(`${src}\n`); // exact fixed point (trailing newline)
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA);
+    expect(sys.modules["f"]!.interior.nodes.some((n) => n.kind === "merge")).toBe(true);
+  });
+
+  it("lifts a branch data-merge (φ: a value assigned differently in each arm, read after) and round-trips (TS)", () => {
+    const src = [
+      "export function pick(flag: boolean, a: string, b: string): string {",
+      "  let out = a;",
+      "  if (flag) {",
+      "    out = a;",
+      "  } else {",
+      "    out = b;",
+      "  }",
+      "  return out;",
+      "}",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+    const merge = sys.modules["pick"]!.interior.nodes.find((n) => n.kind === "merge");
+    expect(merge && "phis" in merge ? merge.phis : undefined).toEqual(["out"]);
   });
 
   it("lifts try/finally and round-trips from TypeScript (item 20)", () => {
