@@ -524,6 +524,11 @@ def _stmt(s):
         return out
     if isinstance(s, ast.Pass):
         return {"t": "pass"}
+    # A bare `...` (Ellipsis) statement is a no-op placeholder body — common in
+    # `@overload` / Protocol stubs (`def get(...) -> _VT: ...`). Model it as `pass`
+    # (a no-op, behaviourally identical); it re-emits `pass`, a stable fixed point.
+    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and s.value.value is Ellipsis:
+        return {"t": "pass"}
     if isinstance(s, ast.Break):
         return {"t": "break"}
     if isinstance(s, ast.Continue):
@@ -708,6 +713,15 @@ def klass(c):
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
             fields.append({"name": n.target.id, "type": map_type(n.annotation)})
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # `@overload` methods are type-checker-only stubs (bodies are `...`),
+            # ERASED at runtime — only the final real implementation runs. Keeping
+            # them would create several methods of the same name (a duplicate-id
+            # collision). Drop them: the real method carries the behaviour, and the
+            # class map stays accurate. (Behaviourally faithful; the type-overload
+            # annotations are the only thing lost — types are labels here anyway.)
+            decs = decorators_of(n)
+            if any(d == "overload" or d.endswith(".overload") for d in decs):
+                continue
             methods.append(func(n, is_method=True))
         elif isinstance(n, ast.Pass):
             continue

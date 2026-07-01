@@ -217,6 +217,21 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
     expect((stub as { source?: string }).source).toBeUndefined();
   });
 
+  it("skips a file that lowers without error but produces STRUCTURALLY INVALID IR", () => {
+    const root = writeProject({
+      // Two methods with the same name → duplicate node id in the class interior.
+      // The lift doesn't throw, but the IR is invalid; the driver must validate the
+      // trial lift and skip it loudly rather than assemble a lie.
+      "dup.ts": "export class C {\n  f(): void {\n    console.log(1);\n  }\n  f(): void {\n    console.log(2);\n  }\n}\n",
+      "ok.ts": "export function ok(): void {\n  console.log(3);\n}\n",
+    });
+    const { system, skipped } = liftDirectory(root);
+    expect(skipped.map((s) => s.file)).toContain("dup.ts");
+    expect(skipped.find((s) => s.file === "dup.ts")!.phase).toBe("lift");
+    expect(system.modules["dup#C"]).toBeUndefined();
+    expect(validateSystem(system).ok).toBe(true); // the assembled System stays valid
+  });
+
   it("does not walk into node_modules or pick up test/declaration files", () => {
     const root = writeProject({
       "keep.ts": "export function keep(): void {\n  console.log(1);\n}\n",
