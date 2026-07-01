@@ -484,12 +484,15 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // any) is a data-out `error`, bound BEFORE lowering the handler that reads
       // it — exactly like a counted loop's index. The body never sees it.
       const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "", ...(s.errorTypes && s.errorTypes.length ? { errorTypes: s.errorTypes } : {}) }, undefined, s.span);
+      // The pushed node object (newNode spreads its partial into a fresh object), so
+      // a phi merge computed below is set on THIS reference, not the partial.
+      const tryNode = ctx.nodes[ctx.nodes.length - 1] as Record<string, unknown>;
       ctx.wires.push([prev, id, "control"]);
       // Each region is lowered against its OWN copy of the bindings so an assignment
       // in the body doesn't leak into the handler (or, after the try, misrepresent a
-      // value that only exists on one path). The continuation carries the SURVIVING
-      // path's bindings — a genuine two-way value merge (both body and handler fall
-      // through and one is read after) is refused up front by assertNoTryMerge.
+      // value that only exists on one path). When BOTH the no-raise path and the
+      // handler fall through and bind a value differently, it becomes a phi on the
+      // try node (noRaise_v/catch_v → v) — the try analogue of the branch merge.
       const before = ctx.varMap;
       ctx.varMap = new Map(before);
       const bodyOpen = lowerBlock(ctx, s.body, `${id}:body`);
@@ -513,9 +516,28 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       }
       // Set the continuation's bindings to the path that survives (the other escaped).
       if (noRaiseOpen === null && handlerOpen === null) { ctx.varMap = before; return null; }
-      if (handlerOpen === null) ctx.varMap = noRaiseVars;
-      else if (noRaiseOpen === null) ctx.varMap = handlerVars;
-      else ctx.varMap = noRaiseVars; // both survive: no divergent var is read after (assertNoTryMerge)
+      if (handlerOpen === null) { ctx.varMap = noRaiseVars; return `${id}:done`; }
+      if (noRaiseOpen === null) { ctx.varMap = handlerVars; return `${id}:done`; }
+      // Both paths survive: merge divergently-bound names into phis on the try node —
+      // the no-raise value on "noRaise_v", the handler value on "catch_v", the merged
+      // value read after on "v". A name defined on only one path (not before) is
+      // path-local: left out of the continuation (a read after it fails as unbound).
+      const merged = new Map(before);
+      const phis: string[] = [];
+      for (const name of new Set([...noRaiseVars.keys(), ...handlerVars.keys()])) {
+        const nr = noRaiseVars.get(name);
+        const h = handlerVars.get(name);
+        if (nr === h) { if (nr !== undefined) merged.set(name, nr); continue; }
+        const nrSrc = nr ?? before.get(name);
+        const hSrc = h ?? before.get(name);
+        if (nrSrc === undefined || hSrc === undefined) { merged.delete(name); continue; }
+        phis.push(name);
+        ctx.wires.push([nrSrc, `${id}:noRaise_${name}`, "data"]);
+        ctx.wires.push([hSrc, `${id}:catch_${name}`, "data"]);
+      }
+      if (phis.length) tryNode.phis = phis;
+      ctx.varMap = merged;
+      for (const v of phis) ctx.varMap.set(v, `${id}:${v}`);
       return `${id}:done`;
     }
     case "with": {
@@ -660,6 +682,15 @@ function topLevelAssignedNames(stmts: Stmt[]): Set<string> {
       if (thenT && elseT) continue; // a terminal branch has no continuation to rebind
       if (!thenT) for (const n of topLevelAssignedNames(s.then)) out.add(n);
       if (!elseT) for (const n of topLevelAssignedNames(s.else)) out.add(n);
+    } else if (s.t === "try" && s.finalbody === undefined) {
+      // A try's surviving paths' rebinds become the continuation (a phi across the
+      // no-raise / handler paths, or the survivor when one escapes) — a top-level
+      // rebind, like a branch. A `finally`-bearing try is left out (no phi home).
+      const noRaiseT = s.orelse !== undefined ? isTerminal(s.orelse) : isTerminal(s.body);
+      const handlerT = isTerminal(s.handler);
+      if (noRaiseT && handlerT) continue;
+      if (!noRaiseT) for (const n of topLevelAssignedNames(s.orelse ?? s.body)) out.add(n);
+      if (!handlerT) for (const n of topLevelAssignedNames(s.handler)) out.add(n);
     }
   }
   return out;
@@ -1084,7 +1115,11 @@ function assertNoTryMerge(stmts: Stmt[], fnName: string): void {
       // bindings unambiguously — supported (handled in the try lowering).
       const noRaiseTerminal = s.orelse !== undefined ? isTerminal(s.orelse) : isTerminal(s.body);
       const bothFallThrough = !noRaiseTerminal && !isTerminal(s.handler);
-      if (bothFallThrough) {
+      // A both-paths-fall-through merge is now representable via the try node's phis
+      // (see the try lowering) — EXCEPT when a `finally` is present: a value merged
+      // across the try/except paths and then possibly rebound by `finally` has no
+      // clean phi home, so that case is still refused.
+      if (bothFallThrough && s.finalbody !== undefined) {
         const assigned = assignedNames(s.body);
         assignedNames(s.handler, assigned);
         if (s.orelse) assignedNames(s.orelse, assigned);

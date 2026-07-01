@@ -156,7 +156,11 @@ export const Node = z.discriminatedUnion("kind", [
   // `except`); optional control-out "else" runs when the body raised nothing
   // (`try/else`) and "finally" always runs on the way out (`finally`). Its raising
   // counterpart is `throw`.
-  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string(), errorTypes: z.array(z.string().min(1)).min(1).optional() }).strict(),
+  // `phis` carries a value merge across the try's paths (like a `merge` after a
+  // branch): when BOTH the no-raise path (body/else) and the handler fall through
+  // and bind a variable `v` differently, data-in "noRaise_v"/"catch_v" carry the
+  // value from each path and data-out "v" is the merged value read after the try.
+  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string(), errorTypes: z.array(z.string().min(1)).min(1).optional(), phis: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A context-managed block (`with ctx as r: …`). Control-in enters; data-in
   // "context" is the context-manager expression; data-out "resource" is the bound
   // value (read inside the body), wired only when the source has an `as` clause;

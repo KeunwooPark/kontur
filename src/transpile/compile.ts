@@ -261,13 +261,26 @@ class ModuleCompiler {
         const v = identifier(node.label);
         const elseTarget = this.controlTargetFrom(`${node.id}:else`);
         const finallyTarget = this.controlTargetFrom(`${node.id}:finally`);
+        const body = this.flowFrom(this.controlTargetFrom(`${node.id}:body`));
+        const handler = this.flowFrom(this.controlTargetFrom(`${node.id}:catch`));
+        const orelse = elseTarget !== undefined ? this.flowFrom(elseTarget) : undefined;
+        // A value merge across the try's paths: reconstruct each phi as a tail
+        // assignment `p = <path source>` on the no-raise arm (else if present, else
+        // body) and the handler arm — skipped when the source already is `p`.
+        for (const p of node.phis ?? []) {
+          const nrExpr = this.resolveInput(node.id, `noRaise_${p}`);
+          const nrArm = orelse ?? body;
+          if (!(nrExpr.t === "var" && nrExpr.name === p)) nrArm.push({ t: "assign", name: p, expr: nrExpr });
+          const cExpr = this.resolveInput(node.id, `catch_${p}`);
+          if (!(cExpr.t === "var" && cExpr.name === p)) handler.push({ t: "assign", name: p, expr: cExpr });
+        }
         stmts.push({
           t: "try",
-          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+          body,
           ...(v ? { catchParam: v } : {}),
           ...(node.errorTypes ? { errorTypes: node.errorTypes } : {}),
-          handler: this.flowFrom(this.controlTargetFrom(`${node.id}:catch`)),
-          ...(elseTarget !== undefined ? { orelse: this.flowFrom(elseTarget) } : {}),
+          handler,
+          ...(orelse !== undefined ? { orelse } : {}),
           ...(finallyTarget !== undefined ? { finalbody: this.flowFrom(finallyTarget) } : {}),
         });
         cur = this.controlTargetFrom(`${node.id}:done`);
@@ -636,6 +649,10 @@ class ModuleCompiler {
     // A try's caught-error binding, read inside its handler.
     if (src.kind === "try" && ep.port === "error") {
       return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // A try's value-merge out-port is the phi variable, read after the try.
+    if (src.kind === "try" && ep.port !== undefined && (src.phis ?? []).includes(ep.port)) {
+      return { t: "var", name: ep.port };
     }
     // A with's `as` resource binding, read inside its body.
     if (src.kind === "with" && ep.port === "resource") {

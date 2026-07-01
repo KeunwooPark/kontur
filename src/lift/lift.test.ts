@@ -1544,6 +1544,14 @@ describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)
     expect(py).toContain("out = (out + p)");
   });
 
+  it("lifts a conditional accumulator updated inside an if→try in a loop (compat's shape) and round-trips", () => {
+    const { py } = rt("def resolve(libs: list) -> int:\n    found = None\n    for lib in libs:\n        if found is None:\n            try:\n                found = load(lib)\n            except ImportError:\n                pass\n    return found\n");
+    expect(py).toContain("if (found is None):");
+    expect(py).toContain("found = load(lib)");
+    expect(py).toContain("except ImportError:");
+    expect(py).toContain("return found");
+  });
+
   it("lifts a while loop with two carried vars and round-trips", () => {
     const { py } = rt("def countdown(n: int) -> int:\n    total = 0\n    while n > 0:\n        total = total + n\n        n = n - 1\n    return total\n");
     expect(py).toContain("total = (total + n)");
@@ -1799,8 +1807,22 @@ describe.skipIf(!hasPython())("lift: exceptions full — typed except / else / f
     expect(transpile(sys, "ts")).toContain("instanceof UnicodeEncodeError");
   });
 
-  it("refuses a value merged across try/except arms (no merge node)", () => {
-    expect(() => liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except (TypeError, AttributeError):\n        x = True\n    return x\n")).toThrow(/merging a value across the try/);
+  it("lifts a value merged across try/except arms (try-value-merge phi) and round-trips", () => {
+    const sys = liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except (TypeError, AttributeError):\n        x = True\n    return x\n");
+    expect(validateSystem(sys).ok).toBe(true);
+    const tryNode = sys.modules["g"]!.interior.nodes.find((n) => n.kind === "try");
+    expect(tryNode && "phis" in tryNode ? tryNode.phis : undefined).toEqual(["x"]);
+    const a = transpile(sys, "python");
+    expect(a).toContain("x = parse()");
+    expect(a).toContain("x = True");
+    expect(a).toContain("return x");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("still refuses a try-value-merge when a finally is present (no clean phi home)", () => {
+    expect(() =>
+      liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except TypeError:\n        x = True\n    finally:\n        cleanup()\n    return x\n"),
+    ).toThrow(/merging a value across the try/);
   });
 
   it("refuses multiple separate except clauses (deferred)", () => {
