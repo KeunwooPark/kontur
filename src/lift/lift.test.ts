@@ -247,11 +247,23 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
   });
 
   // Item 4 turned defaults, *args/**kwargs, and keyword-only params into real
-  // captured IR (see "lift: full signatures" below). Positional-only stays
-  // refused — rarer, and still without an IR home.
-  it("refuses a positional-only parameter", () => {
-    const src = "def f(n: int, /) -> None:\n    print(n)\n";
-    expect(() => liftPython(src)).toThrow(/positional-only/);
+  // captured IR (see "lift: full signatures" below). Positional-only params (`/`)
+  // are now captured too.
+  it("captures a positional-only parameter (`/`) and round-trips", () => {
+    const src = "def f(x: int, y: int, /, z: int) -> int:\n    return (x + z)\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const ports = sys.modules["f"]!.ports.filter((p) => p.io === "in" && p.wire === "data");
+    expect(ports.find((p) => p.name === "x")?.positionalOnly).toBe(true);
+    expect(ports.find((p) => p.name === "z")?.positionalOnly).toBeUndefined();
+    const a = transpile(sys, "python");
+    expect(a).toContain("def f(x: int, y: int, /, z: int) -> int:");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("refuses an `...` (Ellipsis) default cleanly (no traceback)", () => {
+    const src = "def read(length: int = ...) -> bytes:\n    return get(length)\n";
+    expect(() => liftPython(src)).toThrow(/Ellipsis|default/);
   });
 
   it("refuses a non-literal default value (only a literal or name is modelled)", () => {

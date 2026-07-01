@@ -613,6 +613,10 @@ def default_expr(node):
     exclusively. A richer default expression refuses loudly rather than lifting to
     a lie (deferred to a later roadmap item)."""
     if isinstance(node, ast.Constant):
+        # An `...` (Ellipsis) default is a type-stub placeholder (`x: int = ...`), not
+        # a JSON-serializable literal — refuse cleanly rather than crash the extractor.
+        if node.value is Ellipsis:
+            raise SystemExit("lift(py): unsupported `...` (Ellipsis) default value (type-stub placeholder, deferred)")
         return {"t": "lit", "value": node.value}
     if isinstance(node, ast.Name):
         return {"t": "var", "name": node.id}
@@ -621,22 +625,28 @@ def default_expr(node):
 
 def params_of(f, is_method):
     """The full parameter list as neutral-AST params, in declaration order:
-    positional(/keyword) params, then `*args`, then keyword-only params, then
-    `**kwargs`. Defaults, the `*`/`**` markers, and keyword-only-ness are captured
-    so the signature round-trips. Positional-only params (the rare `x, /`) have no
-    IR home yet and refuse loudly."""
+    positional-only params (before `/`), then positional(/keyword) params, then
+    `*args`, then keyword-only params, then `**kwargs`. Defaults, the `/`/`*`/`**`
+    markers, and keyword-/positional-only-ness are captured so the signature
+    round-trips."""
     a = f.args
-    if a.posonlyargs:
-        raise SystemExit("lift(py): unsupported positional-only parameter (not yet in the IR)")
+    posonly = list(a.posonlyargs)
+    # A method's leading `self` is implicit in the IR; drop it wherever it leads.
+    # Defaults align to the TAIL of (posonly + args), so dropping the never-defaulted
+    # head keeps them lined up.
+    if is_method and (posonly or a.args):
+        head = posonly if posonly else a.args
+        if head and head[0].arg == "self":
+            del head[0]
     normal = a.args
-    # A method's leading `self` is implicit in the IR; drop it. Defaults align to
-    # the tail of `normal`, so removing the (never-defaulted) head keeps them lined up.
-    if is_method and normal and normal[0].arg == "self":
-        normal = normal[1:]
     params = []
-    first_default = len(normal) - len(a.defaults)
-    for i, arg in enumerate(normal):
+    # Defaults fill the tail across posonly+normal combined (Python aligns them so).
+    combined = posonly + normal
+    first_default = len(combined) - len(a.defaults)
+    for i, arg in enumerate(combined):
         p = {"name": arg.arg, "type": map_type(arg.annotation)}
+        if i < len(posonly):
+            p["positionalOnly"] = True
         if i >= first_default:
             p["default"] = default_expr(a.defaults[i - first_default])
         params.append(p)

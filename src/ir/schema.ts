@@ -94,6 +94,8 @@ export const Port = z
     default: ParamDefault.optional(),
     variadic: z.enum(["args", "kwargs"]).optional(),
     keywordOnly: z.literal(true).optional(),
+    /** A Python positional-only parameter (declared before the `/` separator). */
+    positionalOnly: z.literal(true).optional(),
   })
   .strict();
 

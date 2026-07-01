@@ -241,6 +241,7 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
       ...(p.default !== undefined ? { default: p.default } : {}),
       ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
       ...(p.keywordOnly ? { keywordOnly: true } : {}),
+      ...(p.positionalOnly ? { positionalOnly: true } : {}),
     });
     ctx.varMap.set(p.name, `P:${p.name}`);
   }

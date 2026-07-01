@@ -201,6 +201,8 @@ export interface Param {
   variadic?: "args" | "kwargs";
   /** A Python keyword-only parameter (declared after `*`). */
   keywordOnly?: boolean;
+  /** A Python positional-only parameter (declared before `/`). */
+  positionalOnly?: boolean;
 }
 
 export interface Fn {

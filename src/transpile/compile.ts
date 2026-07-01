@@ -135,6 +135,7 @@ class ModuleCompiler {
         ...(p.default !== undefined ? { default: p.default } : {}),
         ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
         ...(p.keywordOnly ? { keywordOnly: true } : {}),
+        ...(p.positionalOnly ? { positionalOnly: true } : {}),
       }));
     const returns = this.mod.ports
       .filter((p) => p.io === "out" && p.wire === "data")
