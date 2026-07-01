@@ -548,7 +548,20 @@ def _stmt(s):
         kind = "global" if isinstance(s, ast.Global) else "nonlocal"
         raise SystemExit("lift(py): unsupported " + kind + " declaration (cross-scope mutation has no IR node, deferred)")
     if isinstance(s, ast.Delete):
-        raise SystemExit("lift(py): unsupported `del` statement (deferred)")
+        # `del obj[key]` / `del obj.attr` are control-sequenced effects. A bare-name
+        # delete (`del x`) removes a binding — a scope op with no IR node. Multiple
+        # targets (`del a, b`) are refused (rare); a single subscript/attribute is
+        # modelled. Both refusals are honest deferrals.
+        if len(s.targets) != 1:
+            raise SystemExit("lift(py): unsupported multi-target `del` (deferred)")
+        t = s.targets[0]
+        if isinstance(t, ast.Subscript):
+            if isinstance(t.slice, ast.Slice):
+                raise SystemExit("lift(py): unsupported slice `del` target (deferred)")
+            return {"t": "delIndex", "obj": expr(t.value), "key": expr(t.slice)}
+        if isinstance(t, ast.Attribute):
+            return {"t": "delAttr", "obj": expr(t.value), "attr": t.attr}
+        raise SystemExit("lift(py): unsupported `del` of a bare name (removes a binding — a scope op with no IR node, deferred)")
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 

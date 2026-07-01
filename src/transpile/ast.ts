@@ -96,6 +96,11 @@ export type Stmt = { span?: SourceSpan } & (
   /** Write an indexed element: `obj[key] = value` — the write-side counterpart of
    *  an `index` read. The general subscript-assignment lvalue. */
   | { t: "indexSet"; obj: Expr; key: Expr; value: Expr }
+  /** Delete an indexed element: `del obj[key]` (Python) / `delete obj[key]` (TS).
+   *  A control-sequenced effect, no value. */
+  | { t: "delIndex"; obj: Expr; key: Expr }
+  /** Delete an attribute: `del obj.attr` (Python) / `delete obj.attr` (TS). */
+  | { t: "delAttr"; obj: Expr; attr: string }
   /** Sequence-unpacking assignment: `a, b, … = value`. Each name binds to the
    *  corresponding element of `value` (a sequence); `value` is evaluated once.
    *  Python renders it `a, b = value`, TS `const [a, b] = value`. At least two

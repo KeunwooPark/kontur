@@ -319,6 +319,22 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
+    case "delIndex": {
+      // `del obj[key]`: a control-sequenced effect (no data-out), the receiver on
+      // "obj" and the index on "key".
+      const id = newNode(ctx, { kind: "delIndex", label: "del" }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, s.key), `${id}:key`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
+    case "delAttr": {
+      // `del obj.attr`: a control-sequenced effect, the receiver on "obj".
+      const id = newNode(ctx, { kind: "delAttr", label: "del", attr: s.attr }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
     case "expr": {
       const id = lowerSequencedCall(ctx, expectCall(s.expr), undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
@@ -1132,6 +1148,8 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
       case "stateSet": exprReads(s.value, out); break;
       case "attrSet": exprReads(s.obj, out); exprReads(s.value, out); break;
       case "indexSet": exprReads(s.obj, out); exprReads(s.key, out); exprReads(s.value, out); break;
+      case "delIndex": exprReads(s.obj, out); exprReads(s.key, out); break;
+      case "delAttr": exprReads(s.obj, out); break;
       case "expr": exprReads(s.expr, out); break;
       case "return": if (s.expr) exprReads(s.expr, out); break;
       case "yield": if (s.value) exprReads(s.value, out); break;
@@ -1214,6 +1232,8 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "stateSet": expose(readsOf(s.value)); break;
       case "attrSet": expose(readsOf(s.obj)); expose(readsOf(s.value)); break;
       case "indexSet": expose(readsOf(s.obj)); expose(readsOf(s.key)); expose(readsOf(s.value)); break;
+      case "delIndex": expose(readsOf(s.obj)); expose(readsOf(s.key)); break;
+      case "delAttr": expose(readsOf(s.obj)); break;
       case "expr": expose(readsOf(s.expr)); break;
       case "return": if (s.expr) expose(readsOf(s.expr)); break;
       case "yield": if (s.value) expose(readsOf(s.value)); break;

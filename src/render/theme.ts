@@ -56,6 +56,8 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "attrGet", glyph: "↦", label: "read member" },
   { kind: "attrSet", glyph: "↤", label: "write member" },
   { kind: "indexSet", glyph: "⊐", label: "index write — subscript assign" },
+  { kind: "delIndex", glyph: "⊘", label: "del — delete element" },
+  { kind: "delAttr", glyph: "⊗", label: "del — delete attribute" },
   { kind: "unpack", glyph: "⇶", label: "unpack — destructuring bind" },
   { kind: "broadcast", glyph: "⇉", label: "broadcast — chained assignment" },
 ];
@@ -162,6 +164,9 @@ export const paper: Theme = {
     slice: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // a subscript write shares the collection teal (it writes into a collection).
     indexSet: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    // deletes touch a collection/receiver — share the collection teal.
+    delIndex: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    delAttr: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // unpack destructures a sequence value — share the collection teal.
     unpack: { fill: "#daf0f3", stroke: "#0a7d8c" },
     broadcast: { fill: "#daf0f3", stroke: "#0a7d8c" },
@@ -222,6 +227,8 @@ export const ink: Theme = {
     index: { fill: "#10303a", stroke: "#2bb5c9" },
     slice: { fill: "#10303a", stroke: "#2bb5c9" },
     indexSet: { fill: "#10303a", stroke: "#2bb5c9" }, // subscript write — collection teal
+    delIndex: { fill: "#10303a", stroke: "#2bb5c9" },
+    delAttr: { fill: "#10303a", stroke: "#2bb5c9" },
     unpack: { fill: "#10303a", stroke: "#2bb5c9" }, // destructuring bind — collection teal
     broadcast: { fill: "#10303a", stroke: "#2bb5c9" },
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },

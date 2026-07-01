@@ -1211,6 +1211,40 @@ describe.skipIf(!hasPython())("lift: subscript & attribute assignment targets (i
   it("refuses a slice-assignment target `d[1:3] = v` (deferred)", () => {
     expect(() => liftPython("def f(d: list, v: list) -> None:\n    d[1:3] = v\n")).toThrow(/slice-assignment/);
   });
+
+  it("lifts `del obj[key]` to a delIndex node and round-trips", () => {
+    const { sys, py } = rt('def f(headers: dict) -> None:\n    del headers["Authorization"]\n');
+    expect(py).toContain('del headers["Authorization"]');
+    expect(nodeKinds(sys, "f")).toContain("delIndex");
+  });
+
+  it("lifts `del obj.attr` to a delAttr node and round-trips", () => {
+    const { sys, py } = rt("def f(obj: object) -> None:\n    del obj.cache\n");
+    expect(py).toContain("del obj.cache");
+    expect(nodeKinds(sys, "f")).toContain("delAttr");
+  });
+
+  it("lifts `del self._store[key]` (receiver is stateGet) and round-trips", () => {
+    const { py } = rt("class C:\n    def f(self, key: str) -> None:\n        del self._store[key]\n");
+    expect(py).toContain("del self._store[key]");
+  });
+
+  it("refuses a bare-name `del x` (scope op, deferred) and a slice `del`", () => {
+    expect(() => liftPython("def f(x: int) -> None:\n    del x\n")).toThrow(/bare name/);
+    expect(() => liftPython("def f(d: list) -> None:\n    del d[1:3]\n")).toThrow(/slice `del`/);
+  });
+});
+
+describe("lift: del statement round-trips from TypeScript (delete)", () => {
+  it("lifts `delete obj[key]` / `delete obj.attr` symmetrically and round-trips", () => {
+    const src = 'export function f(o: any): void {\n  delete o["x"];\n  delete o.cache;\n}\n';
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "ts");
+    expect(a).toContain('delete o["x"];');
+    expect(a).toContain("delete o.cache;");
+    expect(transpile(liftTypeScript(a), "ts")).toBe(a); // fixed point
+  });
 });
 
 describe("lift: subscript & attribute assignment round-trip from TypeScript (item 13)", () => {
@@ -2009,8 +2043,10 @@ describe.skipIf(!hasPython())("lift: refuses closures / lambdas / cross-scope (i
   it("refuses a `nonlocal` declaration (cross-scope mutation)", () => {
     expect(() => liftPython("def f() -> None:\n    x = 0\n    nonlocal y\n    y = x\n")).toThrow(/nonlocal declaration/);
   });
-  it("refuses a `del` statement", () => {
-    expect(() => liftPython("def f(d: dict, k: str) -> None:\n    del d[k]\n")).toThrow(/del/);
+  it("still refuses a bare-name `del x` (removes a binding — a scope op)", () => {
+    // `del d[k]` / `del obj.attr` now lift (see the del-statement tests); a bare
+    // name delete removes a binding and stays refused.
+    expect(() => liftPython("def f(x: int) -> None:\n    del x\n")).toThrow(/bare name/);
   });
 });
 

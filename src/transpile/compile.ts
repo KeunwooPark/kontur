@@ -366,6 +366,18 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "delIndex") {
+        stmts.push({ t: "delIndex", obj: this.resolveInput(node.id, "obj"), key: this.resolveInput(node.id, "key") });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
+      if (node.kind === "delAttr") {
+        stmts.push({ t: "delAttr", obj: this.resolveInput(node.id, "obj"), attr: node.attr });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "broadcast") {
         // Chained assignment: the value (resolved once) bound to every name.
         stmts.push({ t: "chain", names: node.names, value: this.resolveInput(node.id, "value") });

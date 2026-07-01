@@ -349,6 +349,17 @@ function liftStmt(s: ts.Statement, sf: ts.SourceFile): Stmt {
       return { t: "indexSet", obj, key, value };
     }
   }
+  // `delete obj[key]` / `delete obj.attr` — a control-sequenced effect statement,
+  // the symmetric counterpart of the Python `del` (delIndex / delAttr).
+  if (ts.isExpressionStatement(s) && ts.isDeleteExpression(s.expression)) {
+    const target = s.expression.expression;
+    if (ts.isElementAccessExpression(target)) {
+      return { t: "delIndex", obj: liftExpr(target.expression, sf), key: liftExpr(target.argumentExpression, sf) };
+    }
+    if (ts.isPropertyAccessExpression(target)) {
+      return { t: "delAttr", obj: liftExpr(target.expression, sf), attr: target.name.text };
+    }
+  }
   if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
     const call = s.expression;
     if (

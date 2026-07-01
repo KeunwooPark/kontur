@@ -140,6 +140,10 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}${expr(s.obj)}.${s.attr} = ${expr(s.value)}`];
     case "indexSet":
       return [`${indent}${expr(s.obj)}[${expr(s.key)}] = ${expr(s.value)}`];
+    case "delIndex":
+      return [`${indent}del ${expr(s.obj)}[${expr(s.key)}]`];
+    case "delAttr":
+      return [`${indent}del ${expr(s.obj)}.${s.attr}`];
     case "destructure":
       return [`${indent}${s.names.map(snake).join(", ")} = ${expr(s.value)}`];
     case "chain":

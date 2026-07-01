@@ -308,6 +308,15 @@ export const Node = z.discriminatedUnion("kind", [
   // general subscript-assignment lvalue, round-tripping in both backends
   // (`obj[key] = v`). `label` is always "index".
   z.object({ ...nodeBase, kind: z.literal("indexSet"), label: z.string() }).strict(),
+  // Delete an indexed element `del obj[key]` — a control-sequenced effect (like
+  // `indexSet` but no written value): control-in/out, data-in "obj" and "key", no
+  // data-out. Round-trips in both backends (`del obj[key]` / `delete obj[key]`).
+  // `label` is always "del".
+  z.object({ ...nodeBase, kind: z.literal("delIndex"), label: z.string() }).strict(),
+  // Delete an attribute `del obj.attr` — a control-sequenced effect: control-in/out,
+  // data-in "obj", no data-out. Round-trips both backends (`del obj.attr` /
+  // `delete obj.attr`). `label` is always "del".
+  z.object({ ...nodeBase, kind: z.literal("delAttr"), label: z.string(), attr: z.string().min(1) }).strict(),
   // Sequence-unpacking bind: `a, b, … = value` (Python `a, b = value`, TS
   // `const [a, b] = value`). A control-sequenced node (an assignment is a
   // statement): control-in/out, one data-in "value" (the sequence), and data-out
