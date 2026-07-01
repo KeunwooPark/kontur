@@ -234,14 +234,19 @@ describe.skipIf(!hasPython())("lift: package imports (Python)", () => {
 // items 4-6 give them a faithful IR home.
 describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)", () => {
   // Item 6 turned plain decorators into real captured IR (see "lift: decorators"
-  // below). @staticmethod / @classmethod stay refused — they drop/rename the
-  // implicit receiver, a parameter-contract change beyond metadata capture.
-  it("refuses @staticmethod (alters the implicit receiver)", () => {
+  // below). @staticmethod is captured now (no implicit receiver, no self injection);
+  // @classmethod stays refused (it renames the receiver to `cls`).
+  it("captures @staticmethod (no self injection) and round-trips", () => {
     const src = "class C:\n    @staticmethod\n    def f(x: int) -> int:\n        return x\n";
-    expect(() => liftPython(src)).toThrow(/staticmethod/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("@staticmethod");
+    expect(a).toContain("def f(x: int) -> int:"); // no `self`
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 
-  it("refuses @classmethod (alters the implicit receiver)", () => {
+  it("refuses @classmethod (renames the implicit receiver to cls)", () => {
     const src = "class C:\n    @classmethod\n    def f(cls, x: int) -> int:\n        return x\n";
     expect(() => liftPython(src)).toThrow(/classmethod/);
   });

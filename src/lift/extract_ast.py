@@ -679,11 +679,17 @@ def decorators_of(node):
     are REFUSED: they drop/rename the implicit receiver, so they change the
     parameter contract rather than just decorate it — a separate concern from
     metadata capture, deferred. Reconstructed via `ast.unparse`, which is
-    idempotent on its own output, so the round-trip is a fixed point."""
+    idempotent on its own output, so the round-trip is a fixed point.
+
+    `@staticmethod` IS captured now: a static method simply has no implicit receiver
+    (no `self`), which the extractor already preserves (self is dropped only when the
+    first param is literally named `self`) and the emitter honours (no `self`
+    injection when `staticmethod` decorates the method). `@classmethod` stays refused
+    — it renames the receiver to `cls`, a distinct receiver model, deferred."""
     out = []
     for d in node.decorator_list:
-        if isinstance(d, ast.Name) and d.id in ("staticmethod", "classmethod"):
-            raise SystemExit("lift(py): unsupported @" + d.id + " (alters the implicit receiver; not yet modelled)")
+        if isinstance(d, ast.Name) and d.id == "classmethod":
+            raise SystemExit("lift(py): unsupported @classmethod (renames the implicit receiver to cls; not yet modelled)")
         out.append(ast.unparse(d))
     return out
 

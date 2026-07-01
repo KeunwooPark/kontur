@@ -237,7 +237,10 @@ function pyParam(p: Param): string {
  *  bare `*` before keyword-only params when no `*args` already separates them. A
  *  method takes an implicit `self`. */
 function pyParams(f: Fn): string {
-  const parts: string[] = f.isMethod ? ["self"] : [];
+  // A method takes an implicit `self` — EXCEPT a @staticmethod, which has no
+  // receiver (its parameters are exactly as written).
+  const isStatic = (f.decorators ?? []).includes("staticmethod");
+  const parts: string[] = f.isMethod && !isStatic ? ["self"] : [];
   let starEmitted = false;
   let slashPending = false; // positional-only params seen, awaiting the `/` separator
   for (const p of f.params) {
