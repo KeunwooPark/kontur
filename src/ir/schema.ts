@@ -129,7 +129,13 @@ export const Node = z.discriminatedUnion("kind", [
   // `starCount` `*x` unpacks wired to pins "star0".. ; `kwNames` keyword args wired
   // to "kw0".. — a string entry is `name=value`, a null entry is `**value`. Plain
   // positional args stay on the bare endpoint. Absent ⇒ a positional-only call.
-  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
+  // `ref`, when set, is the in-project module id this call resolves to — NAVIGATION
+  // metadata only (like a `method` node's `ref`): a stub call kept its bare-pin arg
+  // shape (a value-position call `f(g(x))`, or a spread `f(*a)` that can't wire to a
+  // link's fixed ports), but its callee IS a known function/class, so the renderer
+  // hyperlinks it while the transpiler still emits `label(args)`. Never set together
+  // with `source` (a package call is not an in-project module).
+  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), ref: z.string().min(1).optional(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
   // A control-flow merge — the join point after a `branch` whose two arms both
   // fall through (neither escapes via return/throw). Control-in "then" and "else"

@@ -883,13 +883,23 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     }
     return id;
   }
-  // Not a link: a local helper/stub, or — if its base name was imported — a call
-  // into a package. The latter is tagged with `source` so the diagram shows the
-  // trust-boundary crossing.
+  // Not a link (a spread `f(*a)` couldn't map to fixed ports): a local helper/stub,
+  // or — if its base name was imported — a call into a package (tagged `source`). If
+  // the callee IS a known in-project module, carry a navigation `ref` so the stub is
+  // still hyperlinked (the transpiler emits the same call either way).
   const source = externalSource(ctx, e.name);
-  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}), ...callArgMeta(e) }, idHint, prov);
+  const ref = source ? undefined : callRef(ctx, e.name);
+  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : ref ? { ref } : {}), ...callArgMeta(e) }, idHint, prov);
   wireCallArgs(ctx, e, id);
   return id;
+}
+
+/** The in-project module id a call name resolves to (the target a link WOULD use),
+ *  or undefined for a stub/package call — for tagging a value-position or spread
+ *  call's stub node with a navigation `ref`. */
+function callRef(ctx: Ctx, name: string): string | undefined {
+  const id = linkTarget(ctx, name);
+  return id !== undefined && ctx.moduleParams.has(id) ? id : undefined;
 }
 
 /**
@@ -1091,10 +1101,12 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       // A method call in value position (`return obj.foo()`) → a pure method node.
       const m = methodParts(ctx, e);
       if (m) return lowerMethod(ctx, m);
-      // Otherwise a nested call in value position → a pure (un-sequenced) stub
-      // function, tagged with `source` when it calls into an imported package.
+      // Otherwise a nested call in value position (`f(g(x))`) → a pure (un-sequenced)
+      // stub function, tagged `source` for a package call, or a navigation `ref` when
+      // its callee is a known in-project function/class (so it is still hyperlinked).
       const source = externalSource(ctx, e.name);
-      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}), ...callArgMeta(e) });
+      const ref = source ? undefined : callRef(ctx, e.name);
+      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : ref ? { ref } : {}), ...callArgMeta(e) });
       wireCallArgs(ctx, e, id);
       return id;
     }

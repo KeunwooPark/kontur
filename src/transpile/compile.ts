@@ -547,8 +547,11 @@ class ModuleCompiler {
         if (node.op && UNARY_OPS.has(node.op)) {
           return { t: "un", op: node.op, x: this.resolveInput(node.id, "x") };
         }
-        // An external (package) call carries its source; emit its API name verbatim.
-        return { t: "call", name: node.label, ...this.callArgs(node), ...(node.source ? { external: true } : {}) };
+        // An external (package) call emits its API name verbatim. A stub whose `ref`
+        // resolves to a CLASS is a value-position constructor (`[Box(n)]`): emit the
+        // class name verbatim too, so its PascalCase survives (not snake-cased to `box`).
+        const verbatim = node.source !== undefined || (node.ref !== undefined && this.system.modules[node.ref]?.kind === "class");
+        return { t: "call", name: node.label, ...this.callArgs(node), ...(verbatim ? { external: true } : {}) };
       }
       default:
         throw new Error(`node "${node.id}" (kind ${node.kind}) is not an inlinable value`);
