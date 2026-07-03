@@ -2759,3 +2759,117 @@ describe.skipIf(!hasPython())("lift: class instantiation → constructor link (s
     expect(wired).toEqual(expect.arrayContaining([`${link.id}:x`, `${link.id}:y`]));
   });
 });
+
+describe.skipIf(!hasPython())("lift: method-call resolution → navigable link (Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const method = (sys: System, mod: string, label: string) =>
+    sys.modules[mod]!.interior.nodes.find(
+      (n): n is Extract<Node, { kind: "method" }> => n.kind === "method" && n.label === label,
+    );
+
+  it("resolves `self.other()` to the enclosing class's method (ref), still emitting self.other()", () => {
+    const src = [
+      "class Session:",
+      "    def get(self, url: str) -> int:",
+      "        return self.request(url)",
+      "    def request(self, url: str) -> int:",
+      "        return len(url)",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    // The method node carries a navigation `ref` to Session.request …
+    expect(method(sys, "Session.get", "request")?.ref).toBe("Session.request");
+    // … but the transpiler still emits the receiver call (ref is map-only metadata).
+    expect(py).toContain("        return self.request(url)");
+  });
+
+  it("resolves `local.method()` when the local was built by a constructor", () => {
+    const src = [
+      "class Session:",
+      "    def get(self, url: str) -> int:",
+      "        return len(url)",
+      "",
+      "def run(u: str) -> int:",
+      "    s = Session()",
+      "    return s.get(u)",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    expect(method(sys, "run", "get")?.ref).toBe("Session.get");
+    expect(py).toContain("    return s.get(u)");
+  });
+
+  it("leaves an unresolved receiver as a plain method node (no ref)", () => {
+    const src = [
+      "def use(obj: object) -> int:",
+      "    return obj.compute()",
+      "",
+    ].join("\n");
+    const { sys } = rt(src);
+    // `obj` is a param of unknown class — no receiver type, so no link.
+    expect(method(sys, "use", "compute")?.ref).toBeUndefined();
+  });
+
+  it("does not link `self.other()` to a method the class does not define (inherited)", () => {
+    const src = [
+      "class C:",
+      "    def m(self) -> int:",
+      "        return self.inherited()",
+      "",
+    ].join("\n");
+    const { sys } = rt(src);
+    // `inherited` is not a method of C (comes from a base) — no ref rather than a lie.
+    expect(method(sys, "C.m", "inherited")?.ref).toBeUndefined();
+  });
+});
+
+describe.skipIf(!hasPython())("lift: value-position call → navigable stub (Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const stub = (sys: System, mod: string, label: string) =>
+    sys.modules[mod]!.interior.nodes.find(
+      (n): n is Extract<Node, { kind: "function" }> => n.kind === "function" && n.label === label,
+    );
+
+  it("tags a value-position call to a sibling function with a navigation ref", () => {
+    const src = [
+      "def inner(x: int) -> int:",
+      "    return (x + 1)",
+      "def outer(x: int) -> int:",
+      "    return double(inner(x))",
+      "def double(x: int) -> int:",
+      "    return (x * 2)",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    // `inner(x)` sits in argument position (a stub), but its callee is known — so it
+    // carries a ref for navigation while still transpiling as `double(inner(x))`.
+    expect(stub(sys, "outer", "inner")?.ref).toBe("inner");
+    expect(py).toContain("    return double(inner(x))");
+  });
+
+  it("tags a value-position constructor call with a ref to the class", () => {
+    const src = [
+      "class Box:",
+      "    def __init__(self, n: int) -> None:",
+      "        self.n = n",
+      "def wrap(n: int) -> list:",
+      "    return [Box(n)]",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    expect(stub(sys, "wrap", "Box")?.ref).toBe("Box");
+    expect(py).toContain("    return [Box(n)]");
+  });
+});

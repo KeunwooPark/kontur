@@ -100,7 +100,10 @@ function renderNode(node: LaidOutNode, theme: Theme): string {
   // off-palette `external` swatch, with the package named on a sub-line. This is
   // the audit signal: every crossing into third-party code is visibly marked.
   const isExternal = node.source !== undefined;
-  const isLink = node.kind === "module" && node.ref;
+  // A `module` node is always a link; a `method` or (stub) `function` node is a link
+  // only when the lifter resolved its callee/receiver to an in-project module (a
+  // `ref`). An external package call carries `source`, never `ref`, so stays a boundary.
+  const isLink = (node.kind === "module" || node.kind === "method" || node.kind === "function") && node.ref;
   const style = isExternal ? theme.external : theme.kinds[node.kind];
   const glyph = isExternal ? EXTERNAL_GLYPH : GLYPH[node.kind];
   const cx = node.x + node.w / 2;

@@ -55,6 +55,12 @@ export interface LiftContext {
    * The driver supplies the whole-project map; merged with this file's functions.
    */
   moduleParams?: Map<string, string[]>;
+  /**
+   * Every class module id in the project. Lets a constructor-bound local
+   * (`s = Session()`) be typed, so a later `s.method()` links to that class's
+   * method. The driver supplies the whole-project set; merged with this file's.
+   */
+  classIds?: Set<string>;
 }
 
 interface Ctx {
@@ -80,6 +86,14 @@ interface Ctx {
    *  lowering the body that declares it. Resolved BEFORE `knownFns` so a local
    *  helper shadows a same-named top-level function (lexical scope). */
   localFns?: Map<string, string>;
+  /** Every class module id in the project — used to type a constructor-bound local. */
+  classIds: Set<string>;
+  /** The enclosing class id when lowering a method body (so `self.m()` links to
+   *  `${selfClassId}.m`). Absent for a free function. Inherited by nested fns. */
+  selfClassId?: string;
+  /** Local variable name → the class id it was constructed from (`s = Session()`),
+   *  so a later `s.method()` links to that class's method. Per-function scope. */
+  varTypes: Map<string, string>;
   /** Module-scope names usable as a VALUE (a bare identifier not bound locally):
    *  imported names, sibling classes/functions, module constants, and language
    *  builtins. An unbound `var` that IS one lowers to a `globalRef` (emitted
@@ -131,7 +145,16 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
   // instantiation `Session(...)` wires its args to the class's contract.
   const moduleParams = new Map(lift.moduleParams ?? []);
   for (const f of program.functions) moduleParams.set(qualify(f.name), f.params.map((p) => p.name));
-  for (const c of program.classes) moduleParams.set(qualify(c.name), ctorParamNames(c));
+  for (const c of program.classes) {
+    moduleParams.set(qualify(c.name), ctorParamNames(c));
+    // Register each method's params under its module id, so a resolved `self.m()` /
+    // `local.m()` method-link's existence check (`moduleParams.has`) succeeds.
+    for (const m of c.methods) moduleParams.set(`${qualify(c.name)}.${m.name}`, m.params.map((p) => p.name));
+  }
+  // Every class module id in the project (this file's + the driver's), for typing
+  // a constructor-bound local so a later `local.method()` resolves to a link.
+  const classIds = new Set<string>(lift.classIds ?? []);
+  for (const c of program.classes) classIds.add(qualify(c.name));
   // Map every imported local name to the package it crosses into, so a call
   // through that name is tagged `source`. When the driver has classified imports
   // (it knows the filesystem), use its external map verbatim; otherwise — a
@@ -153,7 +176,7 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
   for (const f of program.functions) freeNames.add(f.name);
   for (const c of program.consts ?? []) freeNames.add(c.name);
   for (const imp of program.imports ?? []) for (const b of imp.bindings) freeNames.add(b.local);
-  const shared = { knownFns, knownClasses, moduleParams, importSource, localImports, qualify, freeNames };
+  const shared = { knownFns, knownClasses, classIds, moduleParams, importSource, localImports, qualify, freeNames };
   const modules: Record<string, Module> = {};
   for (const fn of program.functions) {
     const id = qualify(fn.name);
@@ -191,7 +214,7 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
 }
 
 /** The shared, file-wide resolution state passed to every lowering helper. */
-type Shared = Pick<Ctx, "knownFns" | "knownClasses" | "moduleParams" | "importSource" | "localImports" | "qualify" | "freeNames">;
+type Shared = Pick<Ctx, "knownFns" | "knownClasses" | "classIds" | "moduleParams" | "importSource" | "localImports" | "qualify" | "freeNames">;
 
 /** A class's constructor parameter names (`__init__` / `constructor`, receiver
  *  already dropped by the extractor) — the class's public link contract, so an
@@ -228,7 +251,8 @@ function lowerClass(
   const classId = shared.qualify(cls.name);
   for (const m of cls.methods) {
     const methodId = `${classId}.${m.name}`;
-    modules[methodId] = lowerFn(m, shared, origin, modules, methodId);
+    // Pass the class id so `self.other()` inside the method links to `classId.other`.
+    modules[methodId] = lowerFn(m, shared, origin, modules, methodId, undefined, classId);
     nodes.push({ id: methodId, kind: "module", ref: methodId });
   }
   // A class's public contract is its CONSTRUCTOR: the `__init__`/`constructor`
@@ -275,6 +299,7 @@ function lowerFn(
   modules?: Record<string, Module>,
   selfId?: string,
   inheritedLocalFns?: Map<string, string>,
+  selfClassId?: string,
 ): Module {
   // foldGuards runs BEFORE normalizeReturns so a guard clause + trailing return
   // (`if c: return A` then `return B`) is first folded to `if c: return A else:
@@ -296,7 +321,9 @@ function lowerFn(
     for (const nf of nested) shared.moduleParams.set(localFns.get(nf.name)!, nf.params.map((p) => p.name));
     for (const nf of nested) {
       const nid = localFns.get(nf.name)!;
-      const m = lowerFn(nf, shared, origin, modules, nid, localFns);
+      // A nested fn inside a method inherits its enclosing class, so `self.m()`
+      // inside it links too (self rides ambiently through the re-nested def).
+      const m = lowerFn(nf, shared, origin, modules, nid, localFns, selfClassId);
       m.nestedIn = selfId;
       if (nf.captures && nf.captures.length) m.captures = nf.captures;
       modules[nid] = m;
@@ -305,8 +332,9 @@ function lowerFn(
 
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
-    ...shared, counter: { n: 0 }, returnSource: undefined,
+    ...shared, counter: { n: 0 }, returnSource: undefined, varTypes: new Map(),
     ...(localFns.size ? { localFns } : {}),
+    ...(selfClassId !== undefined ? { selfClassId } : {}),
   };
 
   const ports: Port[] = [{ name: "exec", type: "exec", io: "in", wire: "control" }];
@@ -833,6 +861,9 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     // helper's id carries a `parent$` prefix, so compare against its SIMPLE name.
     const call = e.name === simpleName(link) ? {} : { call: e.name };
     const id = newNode(ctx, { kind: "module", ref: link, ...call }, idHint, prov);
+    // A constructor bound to a plain local (`s = Session()`) types that local, so a
+    // later `s.method()` resolves to the class's method (see `receiverClass`).
+    if (idHint !== undefined && ctx.classIds.has(link)) ctx.varTypes.set(idHint, link);
     // Wire positional args by the CALLEE's param names (port names on its
     // contract), looked up by the resolved target id so a cross-file link wires
     // correctly too. A keyword arg `name=value` wires to that named param port; a
@@ -852,13 +883,23 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     }
     return id;
   }
-  // Not a link: a local helper/stub, or — if its base name was imported — a call
-  // into a package. The latter is tagged with `source` so the diagram shows the
-  // trust-boundary crossing.
+  // Not a link (a spread `f(*a)` couldn't map to fixed ports): a local helper/stub,
+  // or — if its base name was imported — a call into a package (tagged `source`). If
+  // the callee IS a known in-project module, carry a navigation `ref` so the stub is
+  // still hyperlinked (the transpiler emits the same call either way).
   const source = externalSource(ctx, e.name);
-  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}), ...callArgMeta(e) }, idHint, prov);
+  const ref = source ? undefined : callRef(ctx, e.name);
+  const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : ref ? { ref } : {}), ...callArgMeta(e) }, idHint, prov);
   wireCallArgs(ctx, e, id);
   return id;
+}
+
+/** The in-project module id a call name resolves to (the target a link WOULD use),
+ *  or undefined for a stub/package call — for tagging a value-position or spread
+ *  call's stub node with a navigation `ref`. */
+function callRef(ctx: Ctx, name: string): string | undefined {
+  const id = linkTarget(ctx, name);
+  return id !== undefined && ctx.moduleParams.has(id) ? id : undefined;
 }
 
 /**
@@ -1060,10 +1101,12 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
       // A method call in value position (`return obj.foo()`) → a pure method node.
       const m = methodParts(ctx, e);
       if (m) return lowerMethod(ctx, m);
-      // Otherwise a nested call in value position → a pure (un-sequenced) stub
-      // function, tagged with `source` when it calls into an imported package.
+      // Otherwise a nested call in value position (`f(g(x))`) → a pure (un-sequenced)
+      // stub function, tagged `source` for a package call, or a navigation `ref` when
+      // its callee is a known in-project function/class (so it is still hyperlinked).
       const source = externalSource(ctx, e.name);
-      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : {}), ...callArgMeta(e) });
+      const ref = source ? undefined : callRef(ctx, e.name);
+      const id = newNode(ctx, { kind: "function", label: e.name, ...(source ? { source } : ref ? { ref } : {}), ...callArgMeta(e) });
       wireCallArgs(ctx, e, id);
       return id;
     }
@@ -1100,10 +1143,26 @@ function methodParts(ctx: Ctx, e: Extract<Expr, { t: "call" }>): { recv: Expr; c
  * order, like a stub call's args.
  */
 function lowerMethod(ctx: Ctx, m: { recv: Expr; call: Extract<Expr, { t: "call" }> }, idHint?: string, prov?: SourceSpan): string {
-  const id = newNode(ctx, { kind: "method", label: m.call.name, ...callArgMeta(m.call) }, idHint, prov);
+  // When the receiver's class is known — a `self` call (enclosing class) or a local
+  // typed by a constructor (`s = Session()`) — resolve the method to its module id
+  // so the renderer can hyperlink it. NAVIGATION only: the node stays a `method`
+  // (receiver + label), so the transpiler still emits `recv.name(args)`.
+  const cls = receiverClass(ctx, m.recv);
+  const methodId = cls !== undefined ? `${cls}.${m.call.name}` : undefined;
+  const ref = methodId !== undefined && ctx.moduleParams.has(methodId) ? { ref: methodId } : {};
+  const id = newNode(ctx, { kind: "method", label: m.call.name, ...ref, ...callArgMeta(m.call) }, idHint, prov);
   if (m.recv.t !== "self") ctx.wires.push([lowerExpr(ctx, m.recv), `${id}:recv`, "data"]);
   wireCallArgs(ctx, m.call, id);
   return id;
+}
+
+/** The class id of a method-call receiver, when known: `self`/`this` → the
+ *  enclosing class; a bare local → the class it was constructed from
+ *  (`s = Session()`). Undefined for any other receiver (no type inference). */
+function receiverClass(ctx: Ctx, recv: Expr): string | undefined {
+  if (recv.t === "self") return ctx.selfClassId;
+  if (recv.t === "var") return ctx.varTypes.get(recv.name);
+  return undefined;
 }
 
 /**

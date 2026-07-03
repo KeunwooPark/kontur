@@ -240,7 +240,11 @@ function readBack(
   const mod = system.modules[moduleId]!;
   for (const n of mod.interior.nodes) {
     irNodeKind.set(n.id, n.kind);
+    // A `module` node always carries a ref; a `method` or (stub) `function` node
+    // carries one only when its callee/receiver resolved to an in-project module —
+    // any of them makes the node a navigable link.
     if (n.kind === "module") irNodeRef.set(n.id, n.ref);
+    else if ((n.kind === "method" || n.kind === "function") && n.ref) irNodeRef.set(n.id, n.ref);
   }
 
   const nodes: LaidOutNode[] = [];

@@ -67,10 +67,14 @@ export async function renderNavigator(system: System, theme: Theme = defaultThem
   for (const id of ids) { out[id] = []; indeg[id] ??= 0; }
   for (const id of ids) {
     const seen = new Set<string>();
-    for (const n of mods[id]!.interior.nodes)
-      if (n.kind === "module" && mods[n.ref] && n.ref !== id && !seen.has(n.ref)) {
-        seen.add(n.ref); out[id]!.push(n.ref); indeg[n.ref] = (indeg[n.ref] ?? 0) + 1;
+    for (const n of mods[id]!.interior.nodes) {
+      // A `module` node is a link; a `method` or (stub) `function` node with a
+      // resolved `ref` is also a navigable edge (a call into a known module).
+      const ref = n.kind === "module" || n.kind === "method" || n.kind === "function" ? n.ref : undefined;
+      if (ref && mods[ref] && ref !== id && !seen.has(ref)) {
+        seen.add(ref); out[id]!.push(ref); indeg[ref] = (indeg[ref] ?? 0) + 1;
       }
+    }
     // Add each nested child not already reached by a call-link (dedup), so it shows
     // once under its parent and gains an in-edge (no longer a spurious root).
     for (const child of nestedChildren[id] ?? [])

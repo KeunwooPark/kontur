@@ -129,7 +129,13 @@ export const Node = z.discriminatedUnion("kind", [
   // `starCount` `*x` unpacks wired to pins "star0".. ; `kwNames` keyword args wired
   // to "kw0".. — a string entry is `name=value`, a null entry is `**value`. Plain
   // positional args stay on the bare endpoint. Absent ⇒ a positional-only call.
-  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
+  // `ref`, when set, is the in-project module id this call resolves to — NAVIGATION
+  // metadata only (like a `method` node's `ref`): a stub call kept its bare-pin arg
+  // shape (a value-position call `f(g(x))`, or a spread `f(*a)` that can't wire to a
+  // link's fixed ports), but its callee IS a known function/class, so the renderer
+  // hyperlinks it while the transpiler still emits `label(args)`. Never set together
+  // with `source` (a package call is not an in-project module).
+  z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), ref: z.string().min(1).optional(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
   // A control-flow merge — the join point after a `branch` whose two arms both
   // fall through (neither escapes via return/throw). Control-in "then" and "else"
@@ -307,7 +313,13 @@ export const Node = z.discriminatedUnion("kind", [
   // ambient `self`/`this` — a method calling a sibling on its own object — so a
   // self-call carries no receiver edge, mirroring how `self` is implicit in a
   // method's interior. `label` is the method name, emitted verbatim.
-  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
+  // A method call `recv.name(args)`. `ref`, when set, is the module id of the
+  // method this resolves to (`${classId}.${name}`) — NAVIGATION metadata only: the
+  // renderer makes the node a hyperlink to that method's canvas, while the
+  // transpiler still emits `recv.name(args)` from the receiver + label (it ignores
+  // `ref`). Set only when the receiver's class is known (a `self` call, or a local
+  // assigned from a constructor); absent ⇒ an unresolved receiver (a leaf call).
+  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string(), ref: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   // Write an attribute of the enclosing class: a control-sequenced effect
   // (`this.attr = …`), with one data in-pin "value". Effects-as-control-nodes.
   z.object({ ...nodeBase, kind: z.literal("stateSet"), label: z.string(), attr: z.string().min(1) }).strict(),
