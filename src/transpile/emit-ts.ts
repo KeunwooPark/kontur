@@ -10,6 +10,8 @@ const BIN: Partial<Record<Op, string>> = {
   // its closest TS form (`.includes()`) is not infix.
   eq: "===", ne: "!==", lt: "<", le: "<=", gt: ">", ge: ">=",
   is: "===", isnot: "!==",
+  // `**` is native in JS; `//` is not (handled specially in `expr` as Math.floor).
+  pow: "**", bitand: "&", bitor: "|", bitxor: "^", shl: "<<", shr: ">>",
   and: "&&", or: "||", concat: "+",
 };
 
@@ -54,6 +56,8 @@ function expr(e: Expr): string {
     case "bin": {
       if (e.op === "in") return `(${expr(e.b)}.includes(${expr(e.a)}))`;
       if (e.op === "notin") return `(!${expr(e.b)}.includes(${expr(e.a)}))`;
+      // Python floor division has no JS infix; cross-compile one-way to Math.floor.
+      if (e.op === "floordiv") return `Math.floor(${expr(e.a)} / ${expr(e.b)})`;
       return `(${expr(e.a)} ${BIN[e.op]} ${expr(e.b)})`;
     }
     case "un": return `(${UN[e.op]}${expr(e.x)})`;
@@ -168,7 +172,9 @@ function stmt(s: Stmt, indent: string): string[] {
       // constructor (`throw new TypeError(...)`).
       return [`${indent}throw new ${s.errorType ?? "Error"}(${expr(s.arg)});`];
     case "rethrow":
-      return [`${indent}throw ${expr(s.value)};`];
+      // A bare `raise` (no value) re-raises the active exception; TS has no bare
+      // re-throw, so emit a conventional `throw` of the caught binding (best effort).
+      return [`${indent}throw ${s.value !== undefined ? expr(s.value) : "err"};`];
     case "return":
       return [`${indent}return${s.expr ? ` ${expr(s.expr)}` : ""};`];
     case "returnObject":
@@ -272,7 +278,8 @@ function returnType(f: Fn): string {
 function tsParam(p: Param): string {
   const rest = p.variadic !== undefined ? "..." : "";
   const anno = p.type === "any" ? "" : `: ${tsType(p.type)}`;
-  const dflt = p.default !== undefined ? ` = ${expr(p.default)}` : "";
+  const dv = p.default === undefined ? "" : p.default.t === "raw" ? p.default.src : expr(p.default);
+  const dflt = p.default !== undefined ? ` = ${dv}` : "";
   return `${rest}${camel(p.name)}${anno}${dflt}`;
 }
 

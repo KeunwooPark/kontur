@@ -55,7 +55,7 @@ export type Expr =
    *  `obj[1:]`, `obj[:]`). Python renders it faithfully (a source fixed point);
    *  TS has no slice syntax, so it cross-compiles ONE-WAY to `obj.slice(start,
    *  stop)`. A step slice (`obj[::2]`) is refused at lift (deferred). */
-  | { t: "slice"; obj: Expr; start?: Expr; stop?: Expr }
+  | { t: "slice"; obj: Expr; start?: Expr; stop?: Expr; step?: Expr }
   /**
    * A call to a generated function: a helper (stub) or another module. When
    * `external` is set the callee is an imported package symbol — its name is a
@@ -159,7 +159,7 @@ export type Stmt = { span?: SourceSpan } & (
    * constructor wraps it. `value` is the exception being re-raised (typically the
    * enclosing catch binding).
    */
-  | { t: "rethrow"; value: Expr }
+  | { t: "rethrow"; value?: Expr }
   /** Return a value, or a bare `return` (void early exit) when `expr` is absent. */
   | { t: "return"; expr?: Expr }
   /** Return several named values (multi-output module). */
@@ -188,7 +188,8 @@ export type Stmt = { span?: SourceSpan } & (
  */
 export type DefaultValue =
   | { t: "lit"; value: string | number | boolean | null }
-  | { t: "var"; name: string };
+  | { t: "var"; name: string }
+  | { t: "raw"; src: string };
 
 export interface Param {
   name: string;

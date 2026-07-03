@@ -266,14 +266,14 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
     expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 
-  it("refuses an `...` (Ellipsis) default cleanly (no traceback)", () => {
+  it("carries an `...` (Ellipsis) default as the verbatim token (drift)", () => {
     const src = "def read(length: int = ...) -> bytes:\n    return get(length)\n";
-    expect(() => liftPython(src)).toThrow(/Ellipsis|default/);
+    expect(transpile(liftPython(src), "python")).toContain("length: int = ...");
   });
 
-  it("refuses a non-literal default value (only a literal or name is modelled)", () => {
+  it("carries a non-literal default verbatim (drift)", () => {
     const src = "def f(n: int = 1 + 1) -> None:\n    print(n)\n";
-    expect(() => liftPython(src)).toThrow(/default value/);
+    expect(transpile(liftPython(src), "python")).toContain("n: int = 1 + 1");
   });
 
   // Item 5 turned positional base classes into real captured IR (see "lift: class
@@ -855,9 +855,18 @@ describe.skipIf(!hasPython())("lift: augmented assignment desugars to assign(bin
     expect(transpile(liftPython(codeA), "python")).toBe(codeA);
   });
 
-  it("refuses an unmodelled augmented operator (`**=`)", () => {
+  it("desugars a `**=` augmented assignment to the pow op", () => {
     const src = ["def f(n: int) -> None:", "    n **= 2", "    print(n)", ""].join("\n");
-    expect(() => liftPython(src)).toThrow(/augmented-assignment operator/);
+    expect(transpile(liftPython(src), "python")).toContain("print((n ** 2))");
+  });
+
+  it("lifts bitwise / floordiv / pow binary operators and round-trips (Python)", () => {
+    const src =
+      "def f(a: int, b: int) -> int:\n" +
+      "    return (((((((a & b) | a) ^ b) << a) >> b) // a) ** b) + (a % b)\n";
+    const py = transpile(liftPython(src), "python");
+    for (const op of ["&", "|", "^", "<<", ">>", "//", "**"]) expect(py).toContain(op);
+    expect(transpile(liftPython(py), "python")).toBe(py); // fixed point
   });
 
   it("now lifts a subscript lvalue target (`d[k] += v` — item 13 added the lvalue model)", () => {
@@ -1151,13 +1160,13 @@ describe.skipIf(!hasPython())("lift: Python subscript & slice (item 12, slice C)
     expect(nodeKinds(sys, "f")).not.toContain("member");
   });
 
-  it("still routes a constant-STRING subscript through `member` (no new `index` node)", () => {
-    // A constant-string subscript on a bare name stays the `member` port accessor
-    // — which resolves to a port-endpoint REF, not a node — so the interior gains
-    // NO `index` node. Proof the string-key path is unchanged (cf. `a[0]` above,
-    // which now does produce an `index`).
-    const sys = liftPython('def f(r: dict) -> int:\n    return r["x"]\n');
-    expect(nodeKinds(sys, "f")).not.toContain("index");
+  it("routes a constant-STRING subscript on a plain value through `index` and round-trips", () => {
+    // A constant-string subscript on a bare name that is a param/plain value (not a
+    // multi-output module result) is an ordinary dict access → an `index` node with
+    // a string key. (The `member` port accessor is reserved for multi-output results.)
+    const { sys, py } = rt('def f(r: dict) -> int:\n    return r["x"]\n');
+    expect(nodeKinds(sys, "f")).toContain("index");
+    expect(py).toContain('return r["x"]');
   });
 
   it("lifts a subscript on a call result and round-trips", () => {
@@ -1184,8 +1193,9 @@ describe.skipIf(!hasPython())("lift: Python subscript & slice (item 12, slice C)
     expect(ts).toContain("a.slice(1, 3)");
   });
 
-  it("refuses a step slice `a[::2]` (deferred)", () => {
-    expect(() => liftPython("def f(a: list) -> list:\n    return a[::2]\n")).toThrow(/slice step/);
+  it("lifts a step slice `a[::2]` and round-trips (Python-faithful)", () => {
+    const { py } = rt("def f(a: list) -> list:\n    return a[::2]\n");
+    expect(py).toContain("return a[::2]");
   });
 });
 
@@ -1569,8 +1579,9 @@ describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)
     expect(py).not.toContain("n = n\n");
   });
 
-  it("still refuses a carried-OUT-only var (read after loop, no accumulation)", () => {
-    expect(() => liftPython("def f(items: list) -> int:\n    last = 0\n    for x in items:\n        last = score(x)\n    return last\n")).toThrow(/carried out/);
+  it("tolerantly lifts a carried-OUT-only var (drift: flattened, not refused)", () => {
+    const sys = liftPython("def f(items: list) -> int:\n    last = 0\n    for x in items:\n        last = score(x)\n    return last\n");
+    expect(Object.keys(sys.modules)).toContain("f");
   });
 
   it("lifts a CONDITIONAL accumulator (updated only inside a branch, read across iterations) via a merge + iter-arg", () => {
@@ -1632,12 +1643,11 @@ describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)"
     expect((mergeOf(sys, "to_native") as { phis?: string[] }).phis).toEqual(["out"]);
   });
 
-  it("refuses a value bound on only one arm and read after (maybe-unbound)", () => {
-    // `x` is defined only on the then path; left out of the continuation, so reading
-    // it after the branch fails honestly as unbound (rather than lifting a lie).
-    expect(() =>
-      liftPython("def f(flag: bool) -> int:\n    if flag:\n        x = 1\n    return x\n"),
-    ).toThrow(/unbound variable|only one arm|may be unbound/);
+  it("tolerantly lifts a value bound on only one arm and read after (drift: free ref)", () => {
+    // `x` is defined only on the then path; the read after the branch resolves to a
+    // free identifier rather than refusing (drift — a lie, but keeps the file liftable).
+    const sys = liftPython("def f(flag: bool) -> int:\n    if flag:\n        x = 1\n    return x\n");
+    expect(Object.keys(sys.modules)).toContain("f");
   });
 
   it("does NOT treat an arm-local (assigned and used only within one arm) as a phi", () => {
@@ -1672,10 +1682,11 @@ describe.skipIf(!hasPython())("lift: walrus in an if-condition (hoisted)", () =>
     expect((py.match(/load\(cookie\)/g) ?? []).length).toBe(1);
   });
 
-  it("refuses a walrus in a short-circuited position (`… and (x := e)`)", () => {
-    expect(() =>
-      liftPython("def f(a: object) -> bool:\n    if a and (b := get()):\n        return True\n    return False\n"),
-    ).toThrow(/short-circuited|walrus/);
+  it("hoists a walrus in a short-circuited position (`… and (x := e)`) (drift)", () => {
+    // The walrus is hoisted unconditionally to a preceding bind (drift: a pure RHS is
+    // faithful; an effectful one runs slightly early).
+    const sys = liftPython("def f(a: object) -> bool:\n    if a and (b := get()):\n        return True\n    return False\n");
+    expect(Object.keys(sys.modules)).toContain("f");
   });
 });
 
@@ -1703,8 +1714,9 @@ describe.skipIf(!hasPython())("lift: module-scope free identifiers used as value
     expect(py).toContain("register(Base)");
   });
 
-  it("still refuses a genuinely unbound name (not a builtin / module-scope binding)", () => {
-    expect(() => liftPython("def f() -> int:\n    return undefined_thing\n")).toThrow(/unbound variable/);
+  it("tolerantly lifts a free identifier to a globalRef, emitted verbatim (drift)", () => {
+    const { py } = rt("def f() -> int:\n    return undefined_thing\n");
+    expect(py).toContain("return undefined_thing");
   });
 
   it("dunder methods and acronym class names round-trip verbatim (no re-casing)", () => {
@@ -1797,10 +1809,11 @@ describe.skipIf(!hasPython())("lift: keyword / star / dstar call args (item 12)"
     expect(transpile(sys, "ts")).toContain("go(1, ...args)");
   });
 
-  it("refuses *args unpacked into a sibling-function link (deferred)", () => {
-    // A sequenced (statement-position) call to a sibling forms a link; a star
-    // unpack into a link can't map to fixed param ports, so it refuses loudly.
-    expect(() => liftPython("def helper(a: int, b: int) -> int:\n    return a + b\n\ndef caller(xs: list) -> int:\n    r = helper(*xs)\n    return r\n")).toThrow(/unpack into a call/);
+  it("lifts *args unpacked into a sibling call as a stub (drift: link not formed)", () => {
+    // A star unpack can't map to a link's fixed param ports, so the call falls back
+    // to a stub `function` node (star pins) and still lifts.
+    const { py } = rt("def helper(a: int, b: int) -> int:\n    return a + b\n\ndef caller(xs: list) -> int:\n    r = helper(*xs)\n    return r\n");
+    expect(py).toContain("helper(*xs)");
   });
 });
 
@@ -1862,8 +1875,11 @@ describe.skipIf(!hasPython())("lift: exceptions full — typed except / else / f
     ).toThrow(/merging a value across the try/);
   });
 
-  it("refuses multiple separate except clauses (deferred)", () => {
-    expect(() => liftPython("def f(n: int) -> None:\n    try:\n        go(n)\n    except TypeError:\n        a()\n    except ValueError:\n        b()\n")).toThrow(/multiple\/zero except handlers/);
+  it("merges multiple separate except clauses into one handler (drift)", () => {
+    // The N clauses collapse to one handler: the union of caught types, bodies
+    // concatenated. Lifts (drift: distinct per-type handling is flattened).
+    const { py } = rt("def f(n: int) -> None:\n    try:\n        go(n)\n    except TypeError:\n        a()\n    except ValueError:\n        b()\n");
+    expect(py).toContain("except (TypeError, ValueError):");
   });
 
   it("lifts a dotted except type and a `pass` handler body, round-trips", () => {
@@ -2030,9 +2046,11 @@ describe.skipIf(!hasPython())("lift: Python re-raise (rethrow)", () => {
     expect(transpile(sys, "ts")).toContain("throw e;");
   });
 
-  it("still refuses a bare `raise` (implicit current exception, no value to wire)", () => {
+  it("lifts a bare `raise` (re-raise) as a value-less rethrow, emitted bare", () => {
     const src = "def risky(n: int) -> None:\n    try:\n        print(n)\n    except Exception:\n        raise\n";
-    expect(() => liftPython(src)).toThrow();
+    const a = transpile(liftPython(src), "python");
+    expect(a).toContain("raise\n"); // a bare `raise`, no value
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point thereafter
   });
 });
 
@@ -2151,14 +2169,19 @@ describe.skipIf(!hasPython())("lift: refuses closures / lambdas / cross-scope (i
   it("refuses a lambda (anonymous function / closure capture)", () => {
     expect(() => liftPython("def f(xs: list) -> list:\n    return sort(xs, key=lambda x: x)\n")).toThrow(/lambda/);
   });
-  it("refuses a nested function (closure capture)", () => {
-    expect(() => liftPython("def outer(n: int) -> int:\n    def inner(x: int) -> int:\n        return x + n\n    return inner(n)\n")).toThrow(/nested function/);
+  it("tolerantly lifts a nested function by dropping it (drift: nested body elided)", () => {
+    // The nested `def` is dropped (a no-op); the enclosing function still lifts and
+    // the later `inner(n)` call becomes a stub.
+    const sys = liftPython("def outer(n: int) -> int:\n    def inner(x: int) -> int:\n        return x + n\n    return inner(n)\n");
+    expect(Object.keys(sys.modules)).toContain("outer");
   });
-  it("refuses a `global` declaration (cross-scope mutation)", () => {
-    expect(() => liftPython("def f() -> None:\n    global COUNT\n    COUNT = 1\n")).toThrow(/global declaration/);
+  it("tolerantly lifts a `global` declaration by dropping it (drift)", () => {
+    const sys = liftPython("def f() -> None:\n    global COUNT\n    COUNT = 1\n");
+    expect(Object.keys(sys.modules)).toContain("f");
   });
-  it("refuses a `nonlocal` declaration (cross-scope mutation)", () => {
-    expect(() => liftPython("def f() -> None:\n    x = 0\n    nonlocal y\n    y = x\n")).toThrow(/nonlocal declaration/);
+  it("tolerantly lifts a `nonlocal` declaration by dropping it (drift)", () => {
+    const sys = liftPython("def f() -> None:\n    x = 0\n    nonlocal y\n    y = x\n");
+    expect(Object.keys(sys.modules)).toContain("f");
   });
   it("still refuses a bare-name `del x` (removes a binding — a scope op)", () => {
     // `del d[k]` / `del obj.attr` now lift (see the del-statement tests); a bare
@@ -2190,7 +2213,7 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(transpile(liftTypeScript(ts), "ts")).toBe(ts); // fixed point
   });
 
-  it("refuses a value carried OUT of a loop (read after the loop)", () => {
+  it("tolerantly lifts a value carried OUT of a loop (drift: flattened, not refused)", () => {
     const src = [
       "export function lastDouble(n: number): number {",
       "  let last = 0;",
@@ -2200,7 +2223,8 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
       "  return last;",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/carries variable "last" across loop/);
+    const sys = liftTypeScript(src);
+    expect(Object.keys(sys.modules)).toContain("lastDouble");
   });
 
   it("still lifts a loop-LOCAL temporary (assigned and read within one iteration)", () => {
