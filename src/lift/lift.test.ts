@@ -2619,12 +2619,32 @@ describe.skipIf(!hasPython())("lift: nested (local) functions — closure conver
     expect(py).not.toContain("merge_setting(\"response\", default"); // captures not passed
   });
 
-  it("refuses a local function used as a VALUE (an escaping closure)", () => {
+  it("lifts a CAPTURE-FREE escaping local function (used as a value) as its own module", () => {
+    // `g` is returned (used as a value), but captures nothing — so it lifts as a
+    // module and the value-reference re-emits its bare name (a `globalRef`).
     const src = "def f() -> object:\n    def g() -> int:\n        return 1\n    return g\n";
-    expect(() => liftPython(src)).toThrow(/escaping its scope/);
+    const { sys, py } = rt(src);
+    expect(sys.modules["f$g"]).toBeDefined();
+    expect(py).toContain("    def g() -> int:");
+    expect(py).toContain("    return g");
   });
 
-  it("refuses a local function that captures self", () => {
+  it("refuses a local function that BOTH captures locals AND escapes as a value", () => {
+    // A closure over an enclosing local, used as a value, has no flat-IR form.
+    const src = [
+      "def f(n: int) -> object:",
+      "    def g() -> int:",
+      "        return n",
+      "    return g",
+      "",
+    ].join("\n");
+    expect(() => liftPython(src)).toThrow(/captures locals and is used as a value/);
+  });
+
+  it("lifts a local function that reads self (ambient stateGet), and round-trips", () => {
+    // A nested function inside a method reading `self.x` lifts as its own module;
+    // `self` rides ambiently (stateGet), NOT as a capture port, and re-nesting the
+    // def inside the method puts `self` back in scope.
     const src = [
       "class C:",
       "    def m(self) -> int:",
@@ -2633,7 +2653,11 @@ describe.skipIf(!hasPython())("lift: nested (local) functions — closure conver
       "        return inner()",
       "",
     ].join("\n");
-    expect(() => liftPython(src)).toThrow(/capturing self/);
+    const { sys, py } = rt(src);
+    expect(sys.modules["C.m$inner"]).toBeDefined();
+    expect(sys.modules["C.m$inner"]!.captures ?? []).toEqual([]); // self is NOT a capture
+    expect(py).toContain("        def inner() -> int:");
+    expect(py).toContain("            return self.x");
   });
 
   it("refuses `nonlocal` mutation from a local function", () => {
@@ -2663,7 +2687,9 @@ describe.skipIf(!hasPython())("lift: nested (local) functions — closure conver
     expect(() => liftPython(src)).toThrow(/nested more than one level/);
   });
 
-  it("refuses a def nested inside a control block (only a top-level local def lifts)", () => {
+  it("lifts a def nested inside a control block (hoisted out of the branch)", () => {
+    // A `def` inside an `if` is hoisted to the top of the function and lifted as a
+    // module; its call site stays in the branch.
     const src = [
       "def f(flag: bool) -> int:",
       "    if flag:",
@@ -2673,7 +2699,9 @@ describe.skipIf(!hasPython())("lift: nested (local) functions — closure conver
       "    return 0",
       "",
     ].join("\n");
-    expect(() => liftPython(src)).toThrow(/nested inside a control block/);
+    const { sys, py } = rt(src);
+    expect(sys.modules["f$g"]).toBeDefined();
+    expect(py).toContain("    def g() -> int:");
   });
 });
 

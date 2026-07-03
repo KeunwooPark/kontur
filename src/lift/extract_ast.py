@@ -890,11 +890,13 @@ def free_vars(fn_node):
     return free
 
 
-def assert_not_escaping(f, names):
-    """Refuse if any nested-function name is used as a VALUE (not merely called) —
-    returned, stored, or passed as an argument. That is a true closure escaping its
-    scope, which the flat-module IR (named modules with explicit boundaries) cannot
-    represent; a call, by contrast, becomes an ordinary module link."""
+def escaping_names(f, names):
+    """The subset of `names` used somewhere as a VALUE (not merely called) —
+    returned, stored, or passed as an argument. Such a nested function escapes its
+    scope: lifted as its own module, its value-references become verbatim
+    identifier values (`globalRef`) that resolve to the re-nested def. That works
+    when the function is CAPTURE-FREE; a value-reference to a closure-over-locals
+    has no representation, so the caller refuses those (captured + escaping)."""
     escaping = set()
 
     class V(ast.NodeVisitor):
@@ -903,9 +905,8 @@ def assert_not_escaping(f, names):
                 self.visit(a)
             for k in node.keywords:
                 self.visit(k)
-            # The callee position of a nested-name call is the ALLOWED use; anything
-            # else (a bare reference elsewhere) is an escape. Visit the callee only
-            # when it is not one of our names.
+            # The callee position of a nested-name call is the ALLOWED (link) use;
+            # a bare reference anywhere else is a value escape.
             if not (isinstance(node.func, ast.Name) and node.func.id in names):
                 self.visit(node.func)
 
@@ -914,11 +915,44 @@ def assert_not_escaping(f, names):
                 escaping.add(node.id)
 
     V().visit(f)
-    if escaping:
-        raise SystemExit(
-            "lift(py): unsupported local function used as a value (a closure escaping its scope, deferred): "
-            + ", ".join(sorted(escaping))
-        )
+    return escaping
+
+
+def collect_nested_defs(body):
+    """Every FunctionDef in a function's OWN scope — including those inside control
+    blocks (`if`/`for`/`while`/`try`/`with`) — but NOT inside a further-nested
+    def/class/lambda (their own scope). These are hoisted and lifted as modules."""
+    found = []
+
+    def visit(n):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(n)
+            return  # its interior is its own scope; don't descend
+        if isinstance(n, (ast.ClassDef, ast.Lambda)):
+            return
+        for c in ast.iter_child_nodes(n):
+            visit(c)
+
+    for s in body:
+        visit(s)
+    return found
+
+
+class _StripNestedDefs(ast.NodeTransformer):
+    """Remove hoisted nested `def`s from a function's body wherever they sit (top
+    level or inside a control block), leaving their call sites in place. Does not
+    descend into a removed def or a nested class (their own scope)."""
+
+    def visit_FunctionDef(self, node):
+        return None
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        return node
+
+    def visit_Lambda(self, node):
+        return node
 
 
 class _AppendCaptures(ast.NodeTransformer):
@@ -940,18 +974,19 @@ class _AppendCaptures(ast.NodeTransformer):
 def analyze_nested(nd, parent_locals, in_method):
     """Classify a nested (local) function and return its capture list, or refuse
     loudly. Captures are the free variables it reads from the enclosing function's
-    scope; those get promoted to trailing params (closure conversion). The
-    intractable cases — `nonlocal` mutation, capturing `self`, escaping as a value
-    (checked by the caller) — are refused rather than dropped."""
+    scope; those get promoted to trailing params (closure conversion). `self` is NOT
+    captured as a param: a nested function's `self.attr` lifts to the same
+    stateGet/stateSet the enclosing method uses (ambient receiver), and re-nesting
+    the def inside that method puts `self` back in scope. `nonlocal` (rebinding an
+    enclosing local — no cell in the flat IR) is still refused."""
     for n in ast.walk(nd):
         if isinstance(n, ast.Nonlocal):
             raise SystemExit("lift(py): unsupported nonlocal in a local function (mutates an enclosing binding, deferred)")
     free = free_vars(nd)
-    if in_method and "self" in free:
-        raise SystemExit("lift(py): unsupported local function capturing self (deferred)")
     # A free name that is an enclosing local is a CAPTURE; the rest (module globals,
-    # imports, builtins, sibling top-level defs) resolve as free identifiers as before.
-    return sorted(n for n in free if n in parent_locals)
+    # imports, builtins, sibling defs) resolve as free identifiers as before. `self`
+    # rides ambiently (stateGet/stateSet), so it is never promoted to a capture port.
+    return sorted(n for n in free if n in parent_locals and n != "self")
 
 
 def func(f, is_method=False, is_nested=False):
@@ -960,18 +995,27 @@ def func(f, is_method=False, is_nested=False):
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
     doc, body = docstring_of(f.body)
 
-    # Nested (local) function defs at the TOP level of this body → each lifted as its
-    # own module (navigable/expandable), with captured enclosing vars promoted to
-    # trailing params. A def nested inside a control block, or inside an already-
-    # nested function, is a distinct case refused loudly (never silently dropped).
-    nested_defs = [s for s in body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    # Nested (local) function defs anywhere in this body — including inside control
+    # blocks — are each lifted as their own module (navigable/expandable). Captured
+    # enclosing vars are promoted to trailing params (closure conversion); `self`
+    # rides ambiently. A def used as a VALUE (escaping) lifts too — its references
+    # become verbatim identifiers — UNLESS it also captures locals (a closure value,
+    # which the flat IR can't represent). A def nested inside an already-nested
+    # function (>1 level) is still refused loudly.
+    nested_defs = collect_nested_defs(body)
     nested_fns = []
     if nested_defs:
         if is_nested:
             raise SystemExit("lift(py): unsupported function nested more than one level deep (deferred)")
         parent_locals = param_names(f) | scope_bound_names(body)
         captures_by_name = {nd.name: analyze_nested(nd, parent_locals, is_method) for nd in nested_defs}
-        assert_not_escaping(f, set(captures_by_name))
+        # A captured closure used as a value has no flat-IR form — refuse only those.
+        captured_escapes = escaping_names(f, {n for n, caps in captures_by_name.items() if caps})
+        if captured_escapes:
+            raise SystemExit(
+                "lift(py): unsupported local function that both captures locals and is used as a value "
+                "(a closure escaping its scope, deferred): " + ", ".join(sorted(captured_escapes))
+            )
         if any(captures_by_name.values()):
             _AppendCaptures(captures_by_name).visit(f)
             ast.fix_missing_locations(f)
@@ -983,7 +1027,9 @@ def func(f, is_method=False, is_nested=False):
             if caps:
                 nf["captures"] = caps
             nested_fns.append(nf)
-        body = [s for s in body if s not in nested_defs]
+        # Strip the hoisted defs from the body flow (wherever they sat); their call
+        # sites and value-references remain and resolve to the lifted modules.
+        body = [_StripNestedDefs().visit(s) for s in body if not isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
     out = {"name": f.name, "params": params, "returns": returns, "body": stmts(body)}
     if nested_fns:
