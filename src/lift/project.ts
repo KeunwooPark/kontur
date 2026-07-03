@@ -198,10 +198,13 @@ function assemble(
  */
 function computeRoots(modules: System["modules"]): string[] {
   const referenced = new Set<string>();
-  for (const mod of Object.values(modules)) {
+  for (const [id, mod] of Object.entries(modules)) {
     for (const node of mod.interior.nodes) {
       if (node.kind === "module") referenced.add(node.ref);
     }
+    // A nested (local) function belongs to its defining parent — never a root, even
+    // when referenced only as a value (an escaping closure with no call-link).
+    if (mod.nestedIn) referenced.add(id);
   }
   const roots = Object.keys(modules).filter((id) => !referenced.has(id));
   if (roots.length > 0) return roots;

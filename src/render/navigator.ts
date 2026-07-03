@@ -54,6 +54,14 @@ export async function renderNavigator(system: System, theme: Theme = defaultThem
   const ids = Object.keys(mods);
 
   // --- link graph: a `module` node inside an interior is a hyperlink -------
+  // A nested (local) function also belongs to its defining parent (`nestedIn`) — a
+  // STRUCTURAL edge, so a nested fn referenced only as a value (an escaping closure,
+  // which has no call-link) still nests under its parent instead of floating as a root.
+  const nestedChildren: Record<string, string[]> = {};
+  for (const id of ids) {
+    const parent = mods[id]!.nestedIn;
+    if (parent && mods[parent]) (nestedChildren[parent] ??= []).push(id);
+  }
   const out: Record<string, string[]> = {};
   const indeg: Record<string, number> = {};
   for (const id of ids) { out[id] = []; indeg[id] ??= 0; }
@@ -62,6 +70,12 @@ export async function renderNavigator(system: System, theme: Theme = defaultThem
     for (const n of mods[id]!.interior.nodes)
       if (n.kind === "module" && mods[n.ref] && n.ref !== id && !seen.has(n.ref)) {
         seen.add(n.ref); out[id]!.push(n.ref); indeg[n.ref] = (indeg[n.ref] ?? 0) + 1;
+      }
+    // Add each nested child not already reached by a call-link (dedup), so it shows
+    // once under its parent and gains an in-edge (no longer a spurious root).
+    for (const child of nestedChildren[id] ?? [])
+      if (child !== id && !seen.has(child)) {
+        seen.add(child); out[id]!.push(child); indeg[child] = (indeg[child] ?? 0) + 1;
       }
   }
   const odeg = (id: string): number => out[id]!.length;

@@ -266,6 +266,28 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
     expect(system.features).toContain("main#make");
   });
 
+  it.skipIf(!hasPython())("nests an ESCAPING local function under its parent, not as a root", () => {
+    // `pick` is used as a value (`chosen = pick`), never called — an escaping
+    // closure with no call-link. It still lifts as a module and belongs to its
+    // parent via `nestedIn`, so it must NOT float as a top-level navigation root.
+    const root = writeProject({
+      "helpers.py": [
+        "def choose(flag: bool) -> object:",
+        "    def pick() -> int:",
+        "        return 1",
+        "    chosen = pick",
+        "    return chosen",
+        "",
+      ].join("\n"),
+    });
+    const { system, skipped } = liftDirectory(root);
+    expect(skipped).toEqual([]);
+    expect(validateSystem(system).ok).toBe(true);
+    expect(system.modules["helpers#choose$pick"]?.nestedIn).toBe("helpers#choose");
+    expect(system.features).not.toContain("helpers#choose$pick"); // nested, not a root
+    expect(system.features).toContain("helpers#choose");
+  });
+
   it("does not walk into node_modules or pick up test/declaration files", () => {
     const root = writeProject({
       "keep.ts": "export function keep(): void {\n  console.log(1);\n}\n",
