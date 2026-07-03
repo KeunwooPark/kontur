@@ -186,8 +186,8 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
 
   it("skips an unsupported file loudly and degrades a call into it to a stub (no dangling link)", () => {
     const root = writeProject({
-      // Out of subset: a post-branch control-flow merge → lift rejects it.
-      "bad.ts": "export function bad(n: number): void {\n  if (n < 0) {\n    console.log(0);\n  }\n  console.log(n);\n}\n",
+      // Out of subset: a loop-carried-out variable (read after the loop) → lift rejects it.
+      "bad.ts": "export function bad(items: number[]): number {\n  let last = 0;\n  for (const x of items) {\n    last = score(x);\n  }\n  return last;\n}\n",
       "main.ts": [
         'import { bad } from "./bad";',
         "",
@@ -215,6 +215,21 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
     );
     expect(stub).toBeDefined();
     expect((stub as { source?: string }).source).toBeUndefined();
+  });
+
+  it("skips a file that lowers without error but produces STRUCTURALLY INVALID IR", () => {
+    const root = writeProject({
+      // Two methods with the same name → duplicate node id in the class interior.
+      // The lift doesn't throw, but the IR is invalid; the driver must validate the
+      // trial lift and skip it loudly rather than assemble a lie.
+      "dup.ts": "export class C {\n  f(): void {\n    console.log(1);\n  }\n  f(): void {\n    console.log(2);\n  }\n}\n",
+      "ok.ts": "export function ok(): void {\n  console.log(3);\n}\n",
+    });
+    const { system, skipped } = liftDirectory(root);
+    expect(skipped.map((s) => s.file)).toContain("dup.ts");
+    expect(skipped.find((s) => s.file === "dup.ts")!.phase).toBe("lift");
+    expect(system.modules["dup#C"]).toBeUndefined();
+    expect(validateSystem(system).ok).toBe(true); // the assembled System stays valid
   });
 
   it("does not walk into node_modules or pick up test/declaration files", () => {

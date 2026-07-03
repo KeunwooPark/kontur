@@ -72,6 +72,11 @@ interface Ctx {
   localImports: Map<string, LocalImportTarget>;
   /** simple name → fully-qualified module id (identity when ids are bare). */
   qualify: (name: string) => string;
+  /** Module-scope names usable as a VALUE (a bare identifier not bound locally):
+   *  imported names, sibling classes/functions, module constants, and language
+   *  builtins. An unbound `var` that IS one lowers to a `globalRef` (emitted
+   *  verbatim); one that is NOT is a genuine unbound reference and refuses. */
+  freeNames: Set<string>;
   counter: { n: number };
   returnSource: string | undefined;
   /** The function's data out-port name (fn.returns[0].name), so a `return`
@@ -80,6 +85,30 @@ interface Ctx {
   /** Set when at least one `return`/`returnObject` wired a value to the out-port. */
   returnFired?: boolean;
 }
+
+/**
+ * Language builtins usable as a bare VALUE (an isinstance/type argument, a
+ * default, a stored callback) — not exhaustive, but the ones real code passes
+ * around. A bare name that is one of these (and not bound locally) lowers to a
+ * `globalRef` (emitted verbatim) rather than refusing as unbound. Covers Python
+ * and TS/JS since the lowering is shared.
+ */
+const BUILTINS = new Set<string>([
+  // Python type constructors / core objects used as values
+  "str", "bytes", "bytearray", "int", "float", "complex", "bool", "list", "dict",
+  "tuple", "set", "frozenset", "type", "object", "range", "slice", "memoryview",
+  "property", "staticmethod", "classmethod", "super", "NotImplemented", "Ellipsis",
+  // Common Python exception/warning classes referenced as values
+  "Exception", "BaseException", "ValueError", "TypeError", "KeyError", "IndexError",
+  "AttributeError", "RuntimeError", "StopIteration", "NotImplementedError", "OSError",
+  "IOError", "FileNotFoundError", "UnicodeError", "UnicodeEncodeError", "UnicodeDecodeError",
+  "ArithmeticError", "ZeroDivisionError", "LookupError", "NameError", "ImportError",
+  "Warning", "DeprecationWarning", "UserWarning",
+  // TS / JS global objects & constructors used as values
+  "undefined", "NaN", "Infinity", "Object", "Array", "String", "Number", "Boolean",
+  "Symbol", "BigInt", "Math", "JSON", "Date", "Promise", "RegExp", "Map", "Set",
+  "WeakMap", "WeakSet", "Error", "RangeError", "SyntaxError", "console",
+]);
 
 export function liftProgram(program: Program, lift: LiftContext = {}): System {
   const knownFns = new Set(program.functions.map((f) => f.name));
@@ -105,7 +134,14 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
       }
     }
   }
-  const shared = { knownFns, moduleParams, importSource, localImports, qualify };
+  // Module-scope names that may appear as a bare value: builtins, sibling classes
+  // and functions, module constants, and every imported local name.
+  const freeNames = new Set<string>(BUILTINS);
+  for (const c of program.classes) freeNames.add(c.name);
+  for (const f of program.functions) freeNames.add(f.name);
+  for (const c of program.consts ?? []) freeNames.add(c.name);
+  for (const imp of program.imports ?? []) for (const b of imp.bindings) freeNames.add(b.local);
+  const shared = { knownFns, moduleParams, importSource, localImports, qualify, freeNames };
   const modules: Record<string, Module> = {};
   for (const fn of program.functions) modules[qualify(fn.name)] = lowerFn(fn, shared, lift.origin);
   for (const cls of program.classes) lowerClass(cls, modules, shared, lift.origin);
@@ -140,7 +176,7 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
 }
 
 /** The shared, file-wide resolution state passed to every lowering helper. */
-type Shared = Pick<Ctx, "knownFns" | "moduleParams" | "importSource" | "localImports" | "qualify">;
+type Shared = Pick<Ctx, "knownFns" | "moduleParams" | "importSource" | "localImports" | "qualify" | "freeNames">;
 
 /** The package a call name crosses into, or undefined for a local/builtin call.
  *  The base identifier (`name` before any `.`) is what an import binds. */
@@ -186,8 +222,12 @@ function lowerClass(
 }
 
 function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
-  fn = normalizeReturns(fn);
+  // foldGuards runs BEFORE normalizeReturns so a guard clause + trailing return
+  // (`if c: return A` then `return B`) is first folded to `if c: return A else:
+  // return B` and THEN collapsed to a tail `return (A if c else B)` in one pass —
+  // otherwise the ternary only appears on the second transpile (not a fixed point).
   fn = { ...fn, body: foldGuards(fn.body) };
+  fn = normalizeReturns(fn);
   assertNoLoopCarriedState(fn);
   assertNoTryMerge(fn.body, fn.name);
   const ctx: Ctx = {
@@ -205,6 +245,7 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
       ...(p.default !== undefined ? { default: p.default } : {}),
       ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
       ...(p.keywordOnly ? { keywordOnly: true } : {}),
+      ...(p.positionalOnly ? { positionalOnly: true } : {}),
     });
     ctx.varMap.set(p.name, `P:${p.name}`);
   }
@@ -283,6 +324,22 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       return id;
     }
+    case "delIndex": {
+      // `del obj[key]`: a control-sequenced effect (no data-out), the receiver on
+      // "obj" and the index on "key".
+      const id = newNode(ctx, { kind: "delIndex", label: "del" }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([lowerExpr(ctx, s.key), `${id}:key`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
+    case "delAttr": {
+      // `del obj.attr`: a control-sequenced effect, the receiver on "obj".
+      const id = newNode(ctx, { kind: "delAttr", label: "del", attr: s.attr }, undefined, s.span);
+      ctx.wires.push([lowerExpr(ctx, s.obj), `${id}:obj`, "data"]);
+      ctx.wires.push([prev, id, "control"]);
+      return id;
+    }
     case "expr": {
       const id = lowerSequencedCall(ctx, expectCall(s.expr), undefined, s.span);
       ctx.wires.push([prev, id, "control"]);
@@ -325,12 +382,58 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       const id = newNode(ctx, { kind: "branch", label: "branch" }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.cond), `${id}:cond`, "data"]);
       ctx.wires.push([prev, id, "control"]);
-      lowerBlock(ctx, s.then, `${id}:then`);
-      lowerBlock(ctx, s.else, `${id}:else`);
-      return null; // branch arms are terminal
+      // Each arm is lowered against its OWN copy of the variable bindings — a
+      // reassignment in one arm must not leak into the other (or, before the
+      // merge, into the continuation). Snapshot, lower `then`, capture its map;
+      // reset, lower `else`, capture its map.
+      const before = ctx.varMap;
+      ctx.varMap = new Map(before);
+      const thenOpen = lowerBlock(ctx, s.then, `${id}:then`);
+      const thenVars = ctx.varMap;
+      ctx.varMap = new Map(before);
+      const elseOpen = lowerBlock(ctx, s.else, `${id}:else`);
+      const elseVars = ctx.varMap;
+      // Both arms escape (return/throw/…): the branch is terminal, nothing merges.
+      if (thenOpen === null && elseOpen === null) { ctx.varMap = before; return null; }
+      // Exactly one arm escapes: the surviving arm's bindings ARE the continuation
+      // (a guard clause — the folded shape foldGuards produces). No merge node.
+      if (thenOpen === null) { ctx.varMap = elseVars; return elseOpen; }
+      if (elseOpen === null) { ctx.varMap = thenVars; return thenOpen; }
+      // Both arms fall through: a control-flow merge. Compute the post-branch binding
+      // of every name touched on either arm. A name bound differently on the two
+      // paths but DEFINED on both (an arm binding, or the pre-branch value on the arm
+      // that didn't touch it) becomes a phi. A name bound on only ONE arm and not
+      // before is arm-local / maybe-unbound — it is left OUT of the continuation, so
+      // a read after it fails honestly as unbound (rather than resolving to one arm's
+      // value on both paths, or over-refusing a value used only within its arm).
+      const merged = new Map(before);
+      const phis: string[] = [];
+      const phiSrc: Record<string, [string, string]> = {};
+      for (const name of new Set([...thenVars.keys(), ...elseVars.keys()])) {
+        const t = thenVars.get(name);
+        const e = elseVars.get(name);
+        if (t === e) { if (t !== undefined) merged.set(name, t); continue; } // identical on both paths
+        const tSrc = t ?? before.get(name); // value on the then path
+        const eSrc = e ?? before.get(name); // value on the else path
+        if (tSrc === undefined || eSrc === undefined) { merged.delete(name); continue; } // defined on only one path
+        phis.push(name);
+        phiSrc[name] = [tSrc, eSrc];
+      }
+      const mid = newNode(ctx, { kind: "merge", label: "merge", ...(phis.length ? { phis } : {}) }, undefined, s.span);
+      for (const v of phis) {
+        const [tSrc, eSrc] = phiSrc[v]!;
+        ctx.wires.push([tSrc, `${mid}:then_${v}`, "data"]);
+        ctx.wires.push([eSrc, `${mid}:else_${v}`, "data"]);
+      }
+      ctx.wires.push([thenOpen, `${mid}:then`, "control"]);
+      ctx.wires.push([elseOpen, `${mid}:else`, "control"]);
+      ctx.varMap = merged;
+      for (const v of phis) ctx.varMap.set(v, `${mid}:${v}`);
+      return `${mid}:done`;
     }
     case "for": {
       const carried = carriedVars(ctx, s.body, [s.varName]);
+      const before = new Map(ctx.varMap);
       const id = newNode(ctx, { kind: "loop", label: s.varName, ...(carried.length ? { carried } : {}) }, undefined, s.span);
       ctx.wires.push([lowerExpr(ctx, s.from), `${id}:from`, "data"]);
       ctx.wires.push([lowerExpr(ctx, s.to), `${id}:to`, "data"]);
@@ -339,10 +442,12 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.varMap.set(s.varName, `${id}:index`);
       lowerBlock(ctx, s.body, `${id}:body`);
       bindCarriedOut(ctx, id, carried);
+      restoreLoopScope(ctx, before, carried);
       return `${id}:done`;
     }
     case "while": {
       const carried = carriedVars(ctx, s.body, []);
+      const before = new Map(ctx.varMap);
       const id = newNode(ctx, { kind: "while", label: "while", ...(carried.length ? { carried } : {}) }, undefined, s.span);
       // The condition reads the carried value, so bind carry_v BEFORE lowering it.
       bindCarriedIn(ctx, id, carried);
@@ -350,6 +455,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       ctx.wires.push([prev, id, "control"]);
       lowerBlock(ctx, s.body, `${id}:body`);
       bindCarriedOut(ctx, id, carried);
+      restoreLoopScope(ctx, before, carried);
       return `${id}:done`;
     }
     case "foreach": {
@@ -362,6 +468,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // the "item" port.
       const loopVars = s.names ?? [s.varName!];
       const carried = carriedVars(ctx, s.body, loopVars);
+      const before = new Map(ctx.varMap);
       const node = s.names
         ? { kind: "foreach" as const, label: s.names.join(", "), names: s.names, ...(carried.length ? { carried } : {}) }
         : { kind: "foreach" as const, label: s.varName!, ...(carried.length ? { carried } : {}) };
@@ -373,6 +480,7 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       else ctx.varMap.set(s.varName!, `${id}:item`);
       lowerBlock(ctx, s.body, `${id}:body`);
       bindCarriedOut(ctx, id, carried);
+      restoreLoopScope(ctx, before, carried);
       return `${id}:done`;
     }
     case "try": {
@@ -380,19 +488,61 @@ function lowerStmt(ctx: Ctx, s: Stmt, prev: string): string | null {
       // any) is a data-out `error`, bound BEFORE lowering the handler that reads
       // it — exactly like a counted loop's index. The body never sees it.
       const id = newNode(ctx, { kind: "try", label: s.catchParam ?? "", ...(s.errorTypes && s.errorTypes.length ? { errorTypes: s.errorTypes } : {}) }, undefined, s.span);
+      // The pushed node object (newNode spreads its partial into a fresh object), so
+      // a phi merge computed below is set on THIS reference, not the partial.
+      const tryNode = ctx.nodes[ctx.nodes.length - 1] as Record<string, unknown>;
       ctx.wires.push([prev, id, "control"]);
+      // Each region is lowered against its OWN copy of the bindings so an assignment
+      // in the body doesn't leak into the handler (or, after the try, misrepresent a
+      // value that only exists on one path). When BOTH the no-raise path and the
+      // handler fall through and bind a value differently, it becomes a phi on the
+      // try node (noRaise_v/catch_v → v) — the try analogue of the branch merge.
+      const before = ctx.varMap;
+      ctx.varMap = new Map(before);
       const bodyOpen = lowerBlock(ctx, s.body, `${id}:body`);
+      // `else` runs in the no-raise path, after the body — it sees the body's bindings.
+      const elseOpen = s.orelse ? lowerBlock(ctx, s.orelse, `${id}:else`) : undefined;
+      const noRaiseVars = ctx.varMap; // body (+ else) bindings
+      ctx.varMap = new Map(before);
       if (s.catchParam) ctx.varMap.set(s.catchParam, `${id}:error`);
       const handlerOpen = lowerBlock(ctx, s.handler, `${id}:catch`);
-      // Optional `else` (runs when the body raised nothing) and `finally` (always
-      // runs) blocks, each lowered into their own control-out region.
-      const elseOpen = s.orelse ? lowerBlock(ctx, s.orelse, `${id}:else`) : undefined;
+      const handlerVars = ctx.varMap;
+      // `finally` always runs on the way out; lower it against the pre-try bindings
+      // (conservative — it must not assume either path's assignments) and let it
+      // dominate the continuation.
+      ctx.varMap = new Map(before);
       const finallyOpen = s.finalbody ? lowerBlock(ctx, s.finalbody, `${id}:finally`) : undefined;
-      // `finally` (if present) runs last, so it decides fall-through; otherwise the
-      // try falls through unless every path (body/else and handler) escapes.
-      if (finallyOpen !== undefined) return finallyOpen === null ? null : `${id}:done`;
+      const finallyVars = ctx.varMap;
       const noRaiseOpen = elseOpen !== undefined ? elseOpen : bodyOpen;
-      return noRaiseOpen === null && handlerOpen === null ? null : `${id}:done`;
+      if (finallyOpen !== undefined) {
+        ctx.varMap = finallyVars;
+        return finallyOpen === null ? null : `${id}:done`;
+      }
+      // Set the continuation's bindings to the path that survives (the other escaped).
+      if (noRaiseOpen === null && handlerOpen === null) { ctx.varMap = before; return null; }
+      if (handlerOpen === null) { ctx.varMap = noRaiseVars; return `${id}:done`; }
+      if (noRaiseOpen === null) { ctx.varMap = handlerVars; return `${id}:done`; }
+      // Both paths survive: merge divergently-bound names into phis on the try node —
+      // the no-raise value on "noRaise_v", the handler value on "catch_v", the merged
+      // value read after on "v". A name defined on only one path (not before) is
+      // path-local: left out of the continuation (a read after it fails as unbound).
+      const merged = new Map(before);
+      const phis: string[] = [];
+      for (const name of new Set([...noRaiseVars.keys(), ...handlerVars.keys()])) {
+        const nr = noRaiseVars.get(name);
+        const h = handlerVars.get(name);
+        if (nr === h) { if (nr !== undefined) merged.set(name, nr); continue; }
+        const nrSrc = nr ?? before.get(name);
+        const hSrc = h ?? before.get(name);
+        if (nrSrc === undefined || hSrc === undefined) { merged.delete(name); continue; }
+        phis.push(name);
+        ctx.wires.push([nrSrc, `${id}:noRaise_${name}`, "data"]);
+        ctx.wires.push([hSrc, `${id}:catch_${name}`, "data"]);
+      }
+      if (phis.length) tryNode.phis = phis;
+      ctx.varMap = merged;
+      for (const v of phis) ctx.varMap.set(v, `${id}:${v}`);
+      return `${id}:done`;
     }
     case "with": {
       // A context-managed block. The context manager flows in on "context"; the
@@ -519,13 +669,33 @@ function carriedVars(ctx: Ctx, body: Stmt[], loopVars: string[]): string[] {
   return [...topAssigned].filter((v) => exposed.has(v) && !loopVars.includes(v) && ctx.varMap.has(v));
 }
 
-/** Names assigned at the TOP LEVEL of a block (a `let`/`assign`/`destructure`/
- *  `chain` directly in `stmts`, NOT inside a nested branch/loop/try). */
+/** Names rebound at the TOP LEVEL of a block after lowering: a direct
+ *  `let`/`assign`/`destructure`/`chain`, PLUS a name assigned in a top-level `if`
+ *  whose arms do not both escape — a merge (both fall through) phis it, a guard
+ *  (one arm escapes) carries the survivor's, so either becomes a top-level rebind
+ *  once the branch is lowered. This is what lets a CONDITIONAL accumulator
+ *  (`if c: acc = f(acc)`) be a real loop-carried iter-arg rather than a refusal. */
 function topLevelAssignedNames(stmts: Stmt[]): Set<string> {
   const out = new Set<string>();
   for (const s of stmts) {
     if (s.t === "let" || s.t === "assign") out.add(s.name);
-    if (s.t === "destructure" || s.t === "chain") for (const n of s.names) out.add(n);
+    else if (s.t === "destructure" || s.t === "chain") for (const n of s.names) out.add(n);
+    else if (s.t === "if") {
+      const thenT = isTerminal(s.then);
+      const elseT = isTerminal(s.else);
+      if (thenT && elseT) continue; // a terminal branch has no continuation to rebind
+      if (!thenT) for (const n of topLevelAssignedNames(s.then)) out.add(n);
+      if (!elseT) for (const n of topLevelAssignedNames(s.else)) out.add(n);
+    } else if (s.t === "try" && s.finalbody === undefined) {
+      // A try's surviving paths' rebinds become the continuation (a phi across the
+      // no-raise / handler paths, or the survivor when one escapes) — a top-level
+      // rebind, like a branch. A `finally`-bearing try is left out (no phi home).
+      const noRaiseT = s.orelse !== undefined ? isTerminal(s.orelse) : isTerminal(s.body);
+      const handlerT = isTerminal(s.handler);
+      if (noRaiseT && handlerT) continue;
+      if (!noRaiseT) for (const n of topLevelAssignedNames(s.orelse ?? s.body)) out.add(n);
+      if (!handlerT) for (const n of topLevelAssignedNames(s.handler)) out.add(n);
+    }
   }
   return out;
 }
@@ -543,6 +713,21 @@ function bindCarriedIn(ctx: Ctx, id: string, carried: string[]): void {
 function bindCarriedOut(ctx: Ctx, id: string, carried: string[]): void {
   for (const v of carried) ctx.wires.push([ctx.varMap.get(v)!, `${id}:next_${v}`, "data"]);
   for (const v of carried) ctx.varMap.set(v, `${id}:out_${v}`);
+}
+
+/** Restore the variable scope after a loop: the loop variable and any body-local
+ *  temporaries do NOT escape the loop, so a name bound/rebound inside the body is
+ *  reset to its pre-loop binding (or removed if it had none) — EXCEPT carried vars,
+ *  which survive as "out_v" (set by bindCarriedOut). Without this, a leaked loop
+ *  binding would be misread as a phi by a merge that follows the loop. */
+function restoreLoopScope(ctx: Ctx, before: Map<string, string>, carried: string[]): void {
+  const keep = new Set(carried);
+  for (const name of [...ctx.varMap.keys()]) {
+    if (keep.has(name)) continue;
+    const prev = before.get(name);
+    if (prev === undefined) ctx.varMap.delete(name);
+    else ctx.varMap.set(name, prev);
+  }
 }
 
 /** A call that is sequenced on the control wire: a method, a module link, or a stub. */
@@ -617,14 +802,10 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
     case "stateGet":
       return newNode(ctx, { kind: "stateGet", label: e.attr, attr: e.attr });
     case "self":
-      // `self`/`this` is the ambient method receiver, not a value with a producing
-      // node — it only appears as a method's receiver (handled without a wire) or
-      // the base of `self.attr` (a stateGet). A bare `self` value has no IR source
-      // yet, so refuse it loudly rather than invent one.
-      throw new Error(
-        `lift: a bare "self"/"this" value has no IR representation yet — it is ` +
-          `modelled only as a method receiver or the base of self.attr (example level)`,
-      );
+      // `self`/`this` used as a VALUE (an argument, a stored/returned value) — a
+      // pure `selfRef` source. Distinct from a method receiver or `self.attr` base,
+      // where `self` stays implicit (no wire); here it stands on its own.
+      return newNode(ctx, { kind: "selfRef", label: "self" });
     case "attr": {
       // A general attribute read `obj.attr`: a pure data source whose receiver
       // flows in on pin "obj". Distinct from `member` (a port of a multi-output
@@ -635,8 +816,13 @@ function lowerExpr(ctx: Ctx, e: Expr): string {
     }
     case "var": {
       const ep = ctx.varMap.get(e.name);
-      if (ep === undefined) throw new Error(`lift: unbound variable "${e.name}"`);
-      return ep;
+      if (ep !== undefined) return ep;
+      // Not bound locally: a module-scope free identifier (an imported name, a
+      // sibling class/function, a module constant, a builtin) used as a value →
+      // a `globalRef`, emitted verbatim (the import/definition provides it). A name
+      // that is none of those is a genuine unbound reference — refuse it.
+      if (ctx.freeNames.has(e.name)) return newNode(ctx, { kind: "globalRef", label: e.name });
+      throw new Error(`lift: unbound variable "${e.name}"`);
     }
     case "member": {
       const base = ctx.varMap.get(e.name);
@@ -823,10 +1009,11 @@ function normalizeReturns(fn: Fn): Fn {
  *
  * A branch escapes control when an arm is *terminal* (ends in a `throw`, or in a
  * nested all-terminal branch). When exactly one arm escapes, the trailing
- * statements are the continuation of the OTHER arm — there is no post-branch
- * merge point in the graph, so they belong inside it. When NEITHER arm escapes
- * yet code follows the branch, that is a real merge the IR cannot express: we
- * refuse it loudly rather than silently drop the tail (manifesto: never lie).
+ * statements are the continuation of the OTHER arm — folding them into it keeps
+ * the guard-clause shape a source fixed point (`if bad: throw; rest` ⟶
+ * `if bad: throw else: rest`). When NEITHER arm escapes, the trailing statements
+ * are a real control-flow merge — left in place for the lowering to represent with
+ * a `merge` node (both arms rejoin, phi-ing any value assigned differently).
  */
 function foldGuards(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
@@ -834,19 +1021,13 @@ function foldGuards(stmts: Stmt[]): Stmt[] {
     const s = foldNested(stmts[i]!);
     const rest = stmts.slice(i + 1);
     if (s.t === "if" && rest.length > 0) {
-      const folded = foldGuards(rest);
       const thenEscapes = isTerminal(s.then);
       const elseEscapes = isTerminal(s.else);
-      if (thenEscapes && !elseEscapes) { out.push({ ...s, else: [...s.else, ...folded] }); return out; }
-      if (elseEscapes && !thenEscapes) { out.push({ ...s, then: [...s.then, ...folded] }); return out; }
-      if (!thenEscapes && !elseEscapes) {
-        throw new Error(
-          `lift: statements follow a branch whose arms both fall through — a ` +
-            `control-flow merge has no IR node (only a guarding branch, where one ` +
-            `arm escapes via throw, may carry a continuation)`,
-        );
-      }
-      // both arms escape ⇒ the tail is unreachable; leave it (dropped at lowering).
+      if (thenEscapes && !elseEscapes) { out.push({ ...s, else: [...s.else, ...foldGuards(rest)] }); return out; }
+      if (elseEscapes && !thenEscapes) { out.push({ ...s, then: [...s.then, ...foldGuards(rest)] }); return out; }
+      // both arms escape ⇒ the tail is unreachable (dropped at lowering); both fall
+      // through ⇒ a merge (handled at lowering). Either way, keep the branch and let
+      // the trailing statements follow it as ordinary siblings.
     }
     out.push(s);
   }
@@ -931,8 +1112,18 @@ function assertNoLoopCarriedState(fn: Fn): void {
 function assertNoTryMerge(stmts: Stmt[], fnName: string): void {
   stmts.forEach((s, i) => {
     if (s.t === "try") {
-      const fallsThrough = !isTerminal(s.body) || !isTerminal(s.handler) || (s.orelse !== undefined && !isTerminal(s.orelse));
-      if (fallsThrough) {
+      // A value merge exists only when BOTH the no-raise path (body, or `else` when
+      // present) AND the handler fall through — then a variable assigned on one path
+      // and read after the try has no single source. If exactly one path escapes
+      // (a guard, e.g. `except: return`), the continuation sees the survivor's
+      // bindings unambiguously — supported (handled in the try lowering).
+      const noRaiseTerminal = s.orelse !== undefined ? isTerminal(s.orelse) : isTerminal(s.body);
+      const bothFallThrough = !noRaiseTerminal && !isTerminal(s.handler);
+      // A both-paths-fall-through merge is now representable via the try node's phis
+      // (see the try lowering) — EXCEPT when a `finally` is present: a value merged
+      // across the try/except paths and then possibly rebound by `finally` has no
+      // clean phi home, so that case is still refused.
+      if (bothFallThrough && s.finalbody !== undefined) {
         const assigned = assignedNames(s.body);
         assignedNames(s.handler, assigned);
         if (s.orelse) assignedNames(s.orelse, assigned);
@@ -1025,6 +1216,8 @@ function blockReads(stmts: Stmt[], out: Set<string>): void {
       case "stateSet": exprReads(s.value, out); break;
       case "attrSet": exprReads(s.obj, out); exprReads(s.value, out); break;
       case "indexSet": exprReads(s.obj, out); exprReads(s.key, out); exprReads(s.value, out); break;
+      case "delIndex": exprReads(s.obj, out); exprReads(s.key, out); break;
+      case "delAttr": exprReads(s.obj, out); break;
       case "expr": exprReads(s.expr, out); break;
       case "return": if (s.expr) exprReads(s.expr, out); break;
       case "yield": if (s.value) exprReads(s.value, out); break;
@@ -1107,6 +1300,8 @@ function upwardExposedReads(stmts: Stmt[]): Set<string> {
       case "stateSet": expose(readsOf(s.value)); break;
       case "attrSet": expose(readsOf(s.obj)); expose(readsOf(s.value)); break;
       case "indexSet": expose(readsOf(s.obj)); expose(readsOf(s.key)); expose(readsOf(s.value)); break;
+      case "delIndex": expose(readsOf(s.obj)); expose(readsOf(s.key)); break;
+      case "delAttr": expose(readsOf(s.obj)); break;
       case "expr": expose(readsOf(s.expr)); break;
       case "return": if (s.expr) expose(readsOf(s.expr)); break;
       case "yield": if (s.value) expose(readsOf(s.value)); break;

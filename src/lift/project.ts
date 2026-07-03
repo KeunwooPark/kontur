@@ -24,6 +24,7 @@ import type { System } from "../ir/schema.js";
 import { parseTypeScript } from "./ast-from-ts.js";
 import { parsePython } from "./ast-from-python.js";
 import { liftProgram, type LiftContext, type LocalImportTarget } from "./to-ir.js";
+import { validateSystem } from "../ir/validate.js";
 import { langOf, resolveLocalImport } from "./resolve.js";
 
 export interface ProjectOptions {
@@ -112,7 +113,13 @@ export function liftDirectory(root: string, opts: { exclude?: (rel: string) => b
   const liftable = new Set<string>();
   for (const [abs, program] of programs) {
     try {
-      liftProgram(program, { origin: moduleOrigin(root, abs), moduleKey: moduleKey(root, abs) });
+      const trial = liftProgram(program, { origin: moduleOrigin(root, abs), moduleKey: moduleKey(root, abs) });
+      // A trial lift must also be STRUCTURALLY VALID: a file that lowers without
+      // throwing but produces invalid IR (e.g. duplicate method ids from @overload
+      // stubs) must be skipped loudly, never silently assembled into the System —
+      // the manifesto forbids presenting a lie as a lifted file.
+      const v = validateSystem(trial);
+      if (!v.ok) throw new Error(`invalid IR: ${v.issues[0]?.message ?? "failed validation"}`);
       liftable.add(abs);
     } catch (err) {
       skipped.push({ file: moduleOrigin(root, abs), phase: "lift", message: (err as Error).message });

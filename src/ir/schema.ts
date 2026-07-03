@@ -94,6 +94,8 @@ export const Port = z
     default: ParamDefault.optional(),
     variadic: z.enum(["args", "kwargs"]).optional(),
     keywordOnly: z.literal(true).optional(),
+    /** A Python positional-only parameter (declared before the `/` separator). */
+    positionalOnly: z.literal(true).optional(),
   })
   .strict();
 
@@ -118,6 +120,15 @@ export const Node = z.discriminatedUnion("kind", [
   // positional args stay on the bare endpoint. Absent ⇒ a positional-only call.
   z.object({ ...nodeBase, kind: z.literal("function"), label: z.string(), op: Op.optional(), source: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("branch"), label: z.string() }).strict(),
+  // A control-flow merge — the join point after a `branch` whose two arms both
+  // fall through (neither escapes via return/throw). Control-in "then" and "else"
+  // are where each arm's chain converges; control-out "done" continues after the
+  // branch. This is the piece that lets straight-line code follow an if/else.
+  // For each phi variable `v` in `phis`, data-in "then_v"/"else_v" carry the value
+  // `v` held along each arm and data-out "v" is the merged value read downstream —
+  // the SSA φ. A merge with no `phis` is a pure control join (a conditional effect
+  // after which control simply continues). `label` is always "merge".
+  z.object({ ...nodeBase, kind: z.literal("merge"), label: z.string(), phis: z.array(z.string().min(1)).min(1).optional() }).strict(),
   z.object({ ...nodeBase, kind: z.literal("loop"), label: z.string(), carried: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A condition-driven loop. Pins: data-in "cond"; control-out "body" and "done".
   // The counted `loop` carries from/to/index; a `while` carries only a predicate.
@@ -145,7 +156,11 @@ export const Node = z.discriminatedUnion("kind", [
   // `except`); optional control-out "else" runs when the body raised nothing
   // (`try/else`) and "finally" always runs on the way out (`finally`). Its raising
   // counterpart is `throw`.
-  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string(), errorTypes: z.array(z.string().min(1)).min(1).optional() }).strict(),
+  // `phis` carries a value merge across the try's paths (like a `merge` after a
+  // branch): when BOTH the no-raise path (body/else) and the handler fall through
+  // and bind a variable `v` differently, data-in "noRaise_v"/"catch_v" carry the
+  // value from each path and data-out "v" is the merged value read after the try.
+  z.object({ ...nodeBase, kind: z.literal("try"), label: z.string(), errorTypes: z.array(z.string().min(1)).min(1).optional(), phis: z.array(z.string().min(1)).min(1).optional() }).strict(),
   // A context-managed block (`with ctx as r: …`). Control-in enters; data-in
   // "context" is the context-manager expression; data-out "resource" is the bound
   // value (read inside the body), wired only when the source has an `as` clause;
@@ -199,6 +214,12 @@ export const Node = z.discriminatedUnion("kind", [
   // one data-out (the constant's value). `label` is the constant name, emitted
   // verbatim; the constant is declared at module scope from `System.consts`.
   z.object({ ...nodeBase, kind: z.literal("globalRef"), label: z.string() }).strict(),
+  // A reference to the ambient receiver as a VALUE — `self`/`this` used as an
+  // expression (passed as an argument, stored, returned). Pure: NO inputs, one
+  // data-out. Distinct from a `method`/`attrGet` whose receiver is `self`: those
+  // model `self` implicitly (no wire); this is `self` standing on its own, e.g.
+  // `Base.__init__(self, …)`. Valid only inside a method. `label` is always "self".
+  z.object({ ...nodeBase, kind: z.literal("selfRef"), label: z.string() }).strict(),
   // Yield a value from a generator. A control-sequenced effect (control-in/out),
   // data-in "value" (absent for a bare `yield`); NOT terminal — a yield suspends
   // and resumes, so control continues. `delegate` marks `yield from` (delegating
@@ -293,6 +314,15 @@ export const Node = z.discriminatedUnion("kind", [
   // general subscript-assignment lvalue, round-tripping in both backends
   // (`obj[key] = v`). `label` is always "index".
   z.object({ ...nodeBase, kind: z.literal("indexSet"), label: z.string() }).strict(),
+  // Delete an indexed element `del obj[key]` — a control-sequenced effect (like
+  // `indexSet` but no written value): control-in/out, data-in "obj" and "key", no
+  // data-out. Round-trips in both backends (`del obj[key]` / `delete obj[key]`).
+  // `label` is always "del".
+  z.object({ ...nodeBase, kind: z.literal("delIndex"), label: z.string() }).strict(),
+  // Delete an attribute `del obj.attr` — a control-sequenced effect: control-in/out,
+  // data-in "obj", no data-out. Round-trips both backends (`del obj.attr` /
+  // `delete obj.attr`). `label` is always "del".
+  z.object({ ...nodeBase, kind: z.literal("delAttr"), label: z.string(), attr: z.string().min(1) }).strict(),
   // Sequence-unpacking bind: `a, b, … = value` (Python `a, b = value`, TS
   // `const [a, b] = value`). A control-sequenced node (an assignment is a
   // statement): control-in/out, one data-in "value" (the sequence), and data-out

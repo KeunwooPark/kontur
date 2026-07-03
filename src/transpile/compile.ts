@@ -135,6 +135,7 @@ class ModuleCompiler {
         ...(p.default !== undefined ? { default: p.default } : {}),
         ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
         ...(p.keywordOnly ? { keywordOnly: true } : {}),
+        ...(p.positionalOnly ? { positionalOnly: true } : {}),
       }));
     const returns = this.mod.ports
       .filter((p) => p.io === "out" && p.wire === "data")
@@ -168,8 +169,17 @@ class ModuleCompiler {
     return { name: localName(this.id), params, returns, body, ...(this.mod.async ? { async: true } : {}), ...(this.mod.decorators && this.mod.decorators.length ? { decorators: this.mod.decorators } : {}), ...(this.mod.doc !== undefined ? { doc: this.mod.doc } : {}) };
   }
 
-  /** Walk the control chain starting at `target`, producing statements. */
+  /** Walk the control chain from `target`, returning statements. A thin wrapper
+   *  over `walk` for callers that never rejoin at a merge (a function body, a
+   *  loop/try/with block); a merge only surfaces to a branch's own arm walk. */
   private flowFrom(target: string | undefined): Stmt[] {
+    return this.walk(target).stmts;
+  }
+
+  /** Walk the control chain from `target`, producing statements. Stops at a
+   *  `merge` node (a branch's join point) WITHOUT emitting it, returning its id so
+   *  the branch handler can reconstruct the phis and rejoin control afterwards. */
+  private walk(target: string | undefined): { stmts: Stmt[]; merge?: string } {
     const stmts: Stmt[] = [];
     let cur = target;
     while (cur !== undefined) {
@@ -177,14 +187,28 @@ class ModuleCompiler {
       if (ep.kind === "boundary") break; // reached a module out-port → end of chain
       const node = this.node(ep.nodeId);
 
+      if (node.kind === "merge") return { stmts, merge: node.id }; // a branch join point
+
       if (node.kind === "branch") {
-        stmts.push({
-          t: "if",
-          cond: this.resolveInput(node.id, "cond"),
-          then: this.flowFrom(this.controlTargetFrom(`${node.id}:then`)),
-          else: this.flowFrom(this.controlTargetFrom(`${node.id}:else`)),
-        });
-        return stmts; // arms are terminal; nothing falls through after a branch
+        const thenArm = this.walk(this.controlTargetFrom(`${node.id}:then`));
+        const elseArm = this.walk(this.controlTargetFrom(`${node.id}:else`));
+        const mergeId = thenArm.merge ?? elseArm.merge;
+        if (mergeId !== undefined) {
+          // Reconstruct each phi as a tail assignment in its arm: `v = <arm source>`
+          // (skipped when the source already IS `v` — e.g. an empty else keeping the
+          // pre-branch value, whose binding is already in scope).
+          const m = this.node(mergeId) as Extract<Node, { kind: "merge" }>;
+          for (const v of m.phis ?? []) {
+            const tExpr = this.resolveInput(mergeId, `then_${v}`);
+            if (!(tExpr.t === "var" && tExpr.name === v)) thenArm.stmts.push({ t: "assign", name: v, expr: tExpr });
+            const eExpr = this.resolveInput(mergeId, `else_${v}`);
+            if (!(eExpr.t === "var" && eExpr.name === v)) elseArm.stmts.push({ t: "assign", name: v, expr: eExpr });
+          }
+        }
+        stmts.push({ t: "if", cond: this.resolveInput(node.id, "cond"), then: thenArm.stmts, else: elseArm.stmts });
+        if (mergeId === undefined) return { stmts }; // arms terminal — nothing follows
+        cur = this.controlTargetFrom(`${mergeId}:done`); // rejoin after the merge
+        continue;
       }
 
       if (node.kind === "loop") {
@@ -237,13 +261,26 @@ class ModuleCompiler {
         const v = identifier(node.label);
         const elseTarget = this.controlTargetFrom(`${node.id}:else`);
         const finallyTarget = this.controlTargetFrom(`${node.id}:finally`);
+        const body = this.flowFrom(this.controlTargetFrom(`${node.id}:body`));
+        const handler = this.flowFrom(this.controlTargetFrom(`${node.id}:catch`));
+        const orelse = elseTarget !== undefined ? this.flowFrom(elseTarget) : undefined;
+        // A value merge across the try's paths: reconstruct each phi as a tail
+        // assignment `p = <path source>` on the no-raise arm (else if present, else
+        // body) and the handler arm — skipped when the source already is `p`.
+        for (const p of node.phis ?? []) {
+          const nrExpr = this.resolveInput(node.id, `noRaise_${p}`);
+          const nrArm = orelse ?? body;
+          if (!(nrExpr.t === "var" && nrExpr.name === p)) nrArm.push({ t: "assign", name: p, expr: nrExpr });
+          const cExpr = this.resolveInput(node.id, `catch_${p}`);
+          if (!(cExpr.t === "var" && cExpr.name === p)) handler.push({ t: "assign", name: p, expr: cExpr });
+        }
         stmts.push({
           t: "try",
-          body: this.flowFrom(this.controlTargetFrom(`${node.id}:body`)),
+          body,
           ...(v ? { catchParam: v } : {}),
           ...(node.errorTypes ? { errorTypes: node.errorTypes } : {}),
-          handler: this.flowFrom(this.controlTargetFrom(`${node.id}:catch`)),
-          ...(elseTarget !== undefined ? { orelse: this.flowFrom(elseTarget) } : {}),
+          handler,
+          ...(orelse !== undefined ? { orelse } : {}),
           ...(finallyTarget !== undefined ? { finalbody: this.flowFrom(finallyTarget) } : {}),
         });
         cur = this.controlTargetFrom(`${node.id}:done`);
@@ -281,19 +318,19 @@ class ModuleCompiler {
           arg: this.resolveInput(node.id, "value"),
           ...(node.errorType ? { errorType: node.errorType } : {}),
         });
-        return stmts;
+        return { stmts };
       }
 
       if (node.kind === "rethrow") {
         // Terminal too; the value is re-raised unwrapped (`throw e` / `raise e`).
         stmts.push({ t: "rethrow", value: this.resolveInput(node.id, "value") });
-        return stmts;
+        return { stmts };
       }
 
       if (node.kind === "break" || node.kind === "continue") {
         // Terminal loop escape: the chain dead-ends here, like a branch arm.
         stmts.push({ t: node.kind });
-        return stmts;
+        return { stmts };
       }
 
       if (node.kind === "return") {
@@ -301,7 +338,7 @@ class ModuleCompiler {
         // bare (void) return has no value wire. The chain dead-ends here.
         const hasValue = this.dataSrc.has(`${node.id}:value`);
         stmts.push(hasValue ? { t: "return", expr: this.resolveInput(node.id, "value") } : { t: "return" });
-        return stmts;
+        return { stmts };
       }
 
       if (node.kind === "yield") {
@@ -343,6 +380,18 @@ class ModuleCompiler {
         continue;
       }
 
+      if (node.kind === "delIndex") {
+        stmts.push({ t: "delIndex", obj: this.resolveInput(node.id, "obj"), key: this.resolveInput(node.id, "key") });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
+      if (node.kind === "delAttr") {
+        stmts.push({ t: "delAttr", obj: this.resolveInput(node.id, "obj"), attr: node.attr });
+        cur = this.controlNext(node.id);
+        continue;
+      }
+
       if (node.kind === "broadcast") {
         // Chained assignment: the value (resolved once) bound to every name.
         stmts.push({ t: "chain", names: node.names, value: this.resolveInput(node.id, "value") });
@@ -380,7 +429,7 @@ class ModuleCompiler {
 
       cur = this.controlNext(node.id);
     }
-    return stmts;
+    return { stmts };
   }
 
   /** Inline expression for a pure producer node (const / op function / stub). */
@@ -428,6 +477,8 @@ class ModuleCompiler {
         return { t: "await", value: this.resolveInput(node.id, "x") };
       case "globalRef":
         return { t: "global", name: node.label };
+      case "selfRef":
+        return { t: "self" };
       case "slice": {
         // Each bound is present only when its pin is wired (an absent bound is an
         // open slice end, `obj[:3]` / `obj[1:]`).
@@ -498,9 +549,17 @@ class ModuleCompiler {
   }
 
   /** Loop-carried accumulator update, appended to the loop body: `v = <next_v
-   *  source>` (e.g. `total = (total + x)`). */
+   *  source>` (e.g. `total = (total + x)`). A redundant `v = v` is dropped — a
+   *  CONDITIONAL accumulator already reassigns `v` inside the body (via a branch
+   *  merge), so its `next_v` is just `v` and needs no trailing self-assign. */
   private carriedUpdate(node: Extract<Node, { kind: "loop" | "while" | "foreach" }>): Stmt[] {
-    return (node.carried ?? []).map((v) => ({ t: "assign", name: v, expr: this.resolveInput(node.id, `next_${v}`) }));
+    const out: Stmt[] = [];
+    for (const v of node.carried ?? []) {
+      const expr = this.resolveInput(node.id, `next_${v}`);
+      if (expr.t === "var" && expr.name === v) continue;
+      out.push({ t: "assign", name: v, expr });
+    }
+    return out;
   }
 
   /** A stub/method node's positional args: data wires into its BARE endpoint, in
@@ -553,6 +612,11 @@ class ModuleCompiler {
     if (ep.kind === "boundary") return { t: "var", name: ep.port }; // a module in-port → param
 
     const src = this.node(ep.nodeId);
+    // A merge (branch join) out-port is the phi variable itself — the arms bind it,
+    // downstream reads it by name.
+    if (src.kind === "merge" && ep.port !== undefined) {
+      return { t: "var", name: ep.port };
+    }
     // A loop-carried accumulator's value, read in the body ("carry_v") or after the
     // loop ("out_v"), is just the variable `v` — the loop node's iter-args carry it.
     if ((src.kind === "loop" || src.kind === "foreach" || src.kind === "while") && ep.port !== undefined) {
@@ -585,6 +649,10 @@ class ModuleCompiler {
     // A try's caught-error binding, read inside its handler.
     if (src.kind === "try" && ep.port === "error") {
       return { t: "var", name: identifier(src.label) || src.id };
+    }
+    // A try's value-merge out-port is the phi variable, read after the try.
+    if (src.kind === "try" && ep.port !== undefined && (src.phis ?? []).includes(ep.port)) {
+      return { t: "var", name: ep.port };
     }
     // A with's `as` resource binding, read inside its body.
     if (src.kind === "with" && ep.port === "resource") {

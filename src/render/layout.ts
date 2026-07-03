@@ -22,9 +22,9 @@ import { derivePins, portId, boundaryPortId, pinKey, type Pin } from "./ports.js
 // --- output geometry -------------------------------------------------------
 
 export type NodeKind =
-  | "function" | "method" | "branch" | "loop" | "while" | "foreach" | "try" | "with" | "assert" | "throw" | "rethrow" | "break" | "continue" | "return" | "yield" | "effect" | "const" | "module"
-  | "select" | "array" | "collection" | "comprehension" | "itercomp" | "index" | "slice" | "await" | "globalRef"
-  | "state" | "stateGet" | "stateSet" | "attrGet" | "attrSet" | "indexSet" | "unpack" | "broadcast"
+  | "function" | "method" | "branch" | "merge" | "loop" | "while" | "foreach" | "try" | "with" | "assert" | "throw" | "rethrow" | "break" | "continue" | "return" | "yield" | "effect" | "const" | "module"
+  | "select" | "array" | "collection" | "comprehension" | "itercomp" | "index" | "slice" | "await" | "globalRef" | "selfRef"
+  | "state" | "stateGet" | "stateSet" | "attrGet" | "attrSet" | "indexSet" | "delIndex" | "delAttr" | "unpack" | "broadcast"
   | "boundary";
 
 export interface LaidOutPort {

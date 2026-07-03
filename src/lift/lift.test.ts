@@ -234,24 +234,41 @@ describe.skipIf(!hasPython())("lift: package imports (Python)", () => {
 // items 4-6 give them a faithful IR home.
 describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)", () => {
   // Item 6 turned plain decorators into real captured IR (see "lift: decorators"
-  // below). @staticmethod / @classmethod stay refused — they drop/rename the
-  // implicit receiver, a parameter-contract change beyond metadata capture.
-  it("refuses @staticmethod (alters the implicit receiver)", () => {
+  // below). @staticmethod is captured now (no implicit receiver, no self injection);
+  // @classmethod stays refused (it renames the receiver to `cls`).
+  it("captures @staticmethod (no self injection) and round-trips", () => {
     const src = "class C:\n    @staticmethod\n    def f(x: int) -> int:\n        return x\n";
-    expect(() => liftPython(src)).toThrow(/staticmethod/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("@staticmethod");
+    expect(a).toContain("def f(x: int) -> int:"); // no `self`
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 
-  it("refuses @classmethod (alters the implicit receiver)", () => {
+  it("refuses @classmethod (renames the implicit receiver to cls)", () => {
     const src = "class C:\n    @classmethod\n    def f(cls, x: int) -> int:\n        return x\n";
     expect(() => liftPython(src)).toThrow(/classmethod/);
   });
 
   // Item 4 turned defaults, *args/**kwargs, and keyword-only params into real
-  // captured IR (see "lift: full signatures" below). Positional-only stays
-  // refused — rarer, and still without an IR home.
-  it("refuses a positional-only parameter", () => {
-    const src = "def f(n: int, /) -> None:\n    print(n)\n";
-    expect(() => liftPython(src)).toThrow(/positional-only/);
+  // captured IR (see "lift: full signatures" below). Positional-only params (`/`)
+  // are now captured too.
+  it("captures a positional-only parameter (`/`) and round-trips", () => {
+    const src = "def f(x: int, y: int, /, z: int) -> int:\n    return (x + z)\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const ports = sys.modules["f"]!.ports.filter((p) => p.io === "in" && p.wire === "data");
+    expect(ports.find((p) => p.name === "x")?.positionalOnly).toBe(true);
+    expect(ports.find((p) => p.name === "z")?.positionalOnly).toBeUndefined();
+    const a = transpile(sys, "python");
+    expect(a).toContain("def f(x: int, y: int, /, z: int) -> int:");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("refuses an `...` (Ellipsis) default cleanly (no traceback)", () => {
+    const src = "def read(length: int = ...) -> bytes:\n    return get(length)\n";
+    expect(() => liftPython(src)).toThrow(/Ellipsis|default/);
   });
 
   it("refuses a non-literal default value (only a literal or name is modelled)", () => {
@@ -260,16 +277,29 @@ describe.skipIf(!hasPython())("lift: refuse silently-dropped constructs (Python)
   });
 
   // Item 5 turned positional base classes into real captured IR (see "lift: class
-  // inheritance" below). Keyword bases (metaclass=) and non-name base expressions
-  // (Generic[T]) stay refused — still without an IR home.
+  // inheritance" below). Keyword bases (metaclass=) stay refused — no IR home.
+  // Subscripted generic bases (Generic[T]) are now captured verbatim.
   it("refuses a keyword base (metaclass=)", () => {
     const src = "class C(metaclass=Meta):\n    pass\n";
     expect(() => liftPython(src)).toThrow(/keyword base|metaclass/);
   });
 
-  it("refuses a non-name base expression (Generic[T])", () => {
+  it("captures a subscripted generic base (Generic[T]) verbatim and round-trips", () => {
     const src = "class C(Generic[T]):\n    pass\n";
-    expect(() => liftPython(src)).toThrow(/base class expression/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    expect(sys.modules["C"]!.bases).toEqual(["Generic[T]"]);
+    const a = transpile(sys, "python");
+    expect(a).toContain("class C(Generic[T]):");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("captures mixed dotted + subscripted generic bases and round-trips", () => {
+    const src = "class D(MutableMapping[str, _VT], Generic[_VT]):\n    pass\n";
+    const sys = liftPython(src);
+    expect(sys.modules["D"]!.bases).toEqual(["MutableMapping[str, _VT]", "Generic[_VT]"]);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 });
 
@@ -406,6 +436,29 @@ describe.skipIf(!hasPython())("lift: classes (Python)", () => {
     expect(validateSystem(liftPython(codeA)).ok).toBe(true);
     const codeB = transpile(liftPython(codeA), "python");
     expect(codeB).toBe(codeA);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: @overload stubs and `...` placeholder bodies", () => {
+  it("drops @overload stubs (type-only, erased at runtime) keeping the real method, and round-trips", () => {
+    const src = "class D(dict):\n    @overload\n    def get(self, key: str) -> int: ...\n    @overload\n    def get(self, key: str, default: int) -> int: ...\n    def get(self, key: str, default: int = None) -> int:\n        return default\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    // Exactly one `get` method survives (no duplicate-id collision).
+    expect(Object.keys(sys.modules).filter((k) => k.endsWith("D.get")).length).toBe(1);
+    const a = transpile(sys, "python");
+    expect(a).not.toContain("@overload");
+    expect(a).toContain("def get(self, key: str, default: int = None) -> int:");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("tolerates a bare `...` placeholder body (emits pass) and round-trips", () => {
+    const src = "class P:\n    def m(self) -> int: ...\n";
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("pass");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 });
 
@@ -746,13 +799,19 @@ describe.skipIf(!hasPython())("lift: f-strings lower to the concat op (Python)",
     expect(transpile(liftPython(SRC), "ts")).toContain('return ("value=" + x);');
   });
 
-  it("refuses an f-string conversion / format spec (not representable as concat)", () => {
-    expect(() => liftPython(['def g(x: int) -> str:', '    return f"{x:.2f}"', ""].join("\n"))).toThrow(
-      /format spec|conversion/,
-    );
-    expect(() => liftPython(['def g(x: int) -> str:', '    return f"{x!r}"', ""].join("\n"))).toThrow(
-      /format spec|conversion/,
-    );
+  it("lifts an f-string conversion (!r/!s/!a) to a repr/str/ascii call and round-trips", () => {
+    const sys = liftPython('def g(u: str) -> str:\n    return f"({u!r})"\n');
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain('return (("(" + repr(u)) + ")")');
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("lifts an f-string format spec (:08x) to a format(value, spec) call and round-trips", () => {
+    const sys = liftPython('def g(n: int) -> str:\n    return f"{n:08x}"\n');
+    const a = transpile(sys, "python");
+    expect(a).toContain('return format(n, "08x")');
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 });
 
@@ -1198,6 +1257,40 @@ describe.skipIf(!hasPython())("lift: subscript & attribute assignment targets (i
   it("refuses a slice-assignment target `d[1:3] = v` (deferred)", () => {
     expect(() => liftPython("def f(d: list, v: list) -> None:\n    d[1:3] = v\n")).toThrow(/slice-assignment/);
   });
+
+  it("lifts `del obj[key]` to a delIndex node and round-trips", () => {
+    const { sys, py } = rt('def f(headers: dict) -> None:\n    del headers["Authorization"]\n');
+    expect(py).toContain('del headers["Authorization"]');
+    expect(nodeKinds(sys, "f")).toContain("delIndex");
+  });
+
+  it("lifts `del obj.attr` to a delAttr node and round-trips", () => {
+    const { sys, py } = rt("def f(obj: object) -> None:\n    del obj.cache\n");
+    expect(py).toContain("del obj.cache");
+    expect(nodeKinds(sys, "f")).toContain("delAttr");
+  });
+
+  it("lifts `del self._store[key]` (receiver is stateGet) and round-trips", () => {
+    const { py } = rt("class C:\n    def f(self, key: str) -> None:\n        del self._store[key]\n");
+    expect(py).toContain("del self._store[key]");
+  });
+
+  it("refuses a bare-name `del x` (scope op, deferred) and a slice `del`", () => {
+    expect(() => liftPython("def f(x: int) -> None:\n    del x\n")).toThrow(/bare name/);
+    expect(() => liftPython("def f(d: list) -> None:\n    del d[1:3]\n")).toThrow(/slice `del`/);
+  });
+});
+
+describe("lift: del statement round-trips from TypeScript (delete)", () => {
+  it("lifts `delete obj[key]` / `delete obj.attr` symmetrically and round-trips", () => {
+    const src = 'export function f(o: any): void {\n  delete o["x"];\n  delete o.cache;\n}\n';
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "ts");
+    expect(a).toContain('delete o["x"];');
+    expect(a).toContain("delete o.cache;");
+    expect(transpile(liftTypeScript(a), "ts")).toBe(a); // fixed point
+  });
 });
 
 describe("lift: subscript & attribute assignment round-trip from TypeScript (item 13)", () => {
@@ -1294,6 +1387,15 @@ describe.skipIf(!hasPython())("lift: tuple unpacking assignment (item 14, Python
     expect((py.match(/compute/g) ?? []).length).toBe(1); // evaluated once
     expect(nodeKinds(sys, "g")).toContain("broadcast");
     expect(transpile(sys, "ts")).toContain("let y = x;");
+  });
+
+  it("lifts a chained assignment with a mixed lvalue target (name + subscript) and round-trips", () => {
+    // `manager = self.proxy_manager[proxy] = build(proxy)` — the value is evaluated
+    // once into the name holder, then the subscript lvalue is set from it.
+    const { py } = rt("class A:\n    def connect(self, proxy: str) -> object:\n        manager = self.proxy_manager[proxy] = build(proxy)\n        return manager\n");
+    expect((py.match(/build\(proxy\)/g) ?? []).length).toBe(1); // evaluated once
+    expect(py).toContain("manager = build(proxy)");
+    expect(py).toContain("self.proxy_manager[proxy] = manager");
   });
 
   it("refuses a starred unpack target `a, *rest = xs` (deferred)", () => {
@@ -1451,6 +1553,14 @@ describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)
     expect(py).toContain("out = (out + p)");
   });
 
+  it("lifts a conditional accumulator updated inside an if→try in a loop (compat's shape) and round-trips", () => {
+    const { py } = rt("def resolve(libs: list) -> int:\n    found = None\n    for lib in libs:\n        if found is None:\n            try:\n                found = load(lib)\n            except ImportError:\n                pass\n    return found\n");
+    expect(py).toContain("if (found is None):");
+    expect(py).toContain("found = load(lib)");
+    expect(py).toContain("except ImportError:");
+    expect(py).toContain("return found");
+  });
+
   it("lifts a while loop with two carried vars and round-trips", () => {
     const { py } = rt("def countdown(n: int) -> int:\n    total = 0\n    while n > 0:\n        total = total + n\n        n = n - 1\n    return total\n");
     expect(py).toContain("total = (total + n)");
@@ -1461,6 +1571,146 @@ describe.skipIf(!hasPython())("lift: loop-carried accumulators (item 19, Python)
 
   it("still refuses a carried-OUT-only var (read after loop, no accumulation)", () => {
     expect(() => liftPython("def f(items: list) -> int:\n    last = 0\n    for x in items:\n        last = score(x)\n    return last\n")).toThrow(/carried out/);
+  });
+
+  it("lifts a CONDITIONAL accumulator (updated only inside a branch, read across iterations) via a merge + iter-arg", () => {
+    // dispatch_hook's shape: acc is read each iteration and conditionally updated.
+    const { sys, py } = rt("def run(items: list, acc: int) -> int:\n    for x in items:\n        y = step(acc, x)\n        if ok(y):\n            acc = y\n    return acc\n");
+    const fe = sys.modules["run"]!.interior.nodes.find((n) => n.kind === "foreach")!;
+    expect((fe as { carried?: string[] }).carried).toEqual(["acc"]);
+    expect(py).toContain("if ok(y):");
+    expect(py).toContain("acc = y");
+    // No redundant self-assign for the conditional carry.
+    expect(py).not.toContain("acc = acc\n");
+  });
+
+  it("does not leak a loop variable into a merge that follows the loop", () => {
+    // `x` (loop var) and `t` (body-local) must not escape as phis of the outer if.
+    const { py } = rt("def f(flag: bool, items: list, acc: int) -> int:\n    if flag:\n        for x in items:\n            t = step(acc, x)\n            if ok(t):\n                acc = t\n    return acc\n");
+    expect(py).toContain("for x in items:");
+    expect(py).toContain("return acc");
+  });
+});
+
+describe.skipIf(!hasPython())("lift: control-flow merge / φ node (branch join)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+  const mergeOf = (sys: ReturnType<typeof liftPython>, fn: string) =>
+    sys.modules[fn]!.interior.nodes.find((n) => n.kind === "merge");
+
+  it("lifts a pure control merge (conditional effect, then continue) and round-trips", () => {
+    const { sys, py } = rt("def g(n: int) -> None:\n    if (n < 0):\n        print(0)\n    print(n)\n");
+    expect(mergeOf(sys, "g")).toBeDefined();
+    expect((mergeOf(sys, "g") as { phis?: string[] }).phis).toBeUndefined();
+    expect(py).toContain("if (n < 0):");
+    expect(py).toContain("print(n)");
+  });
+
+  it("lifts a data-merge φ (value assigned in both arms, read after) and round-trips", () => {
+    const { sys, py } = rt("def pick(flag: bool, a: str, b: str) -> str:\n    if flag:\n        out = a\n    else:\n        out = b\n    return out\n");
+    expect((mergeOf(sys, "pick") as { phis?: string[] }).phis).toEqual(["out"]);
+    expect(py).toContain("out = a");
+    expect(py).toContain("out = b");
+    expect(py).toContain("return out");
+  });
+
+  it("lifts a one-armed φ (empty else keeps the pre-branch value) and round-trips", () => {
+    // `hook_list = [hook_list]` inside a guard, read after — dispatch_hook's shape.
+    const { sys, py } = rt("def h(x: int, flag: bool) -> int:\n    y = x\n    if flag:\n        y = (x + 1)\n    return y\n");
+    expect((mergeOf(sys, "h") as { phis?: string[] }).phis).toEqual(["y"]);
+    expect(py).toContain("y = (x + 1)");
+    expect(py).toContain("return y");
+  });
+
+  it("mirrors to_native_string (isinstance branch → φ on `out`) and round-trips", () => {
+    const { sys } = rt('def to_native(string: str, encoding: str) -> str:\n    if is_str(string):\n        out = string\n    else:\n        out = decode(string, encoding)\n    return out\n');
+    expect((mergeOf(sys, "to_native") as { phis?: string[] }).phis).toEqual(["out"]);
+  });
+
+  it("refuses a value bound on only one arm and read after (maybe-unbound)", () => {
+    // `x` is defined only on the then path; left out of the continuation, so reading
+    // it after the branch fails honestly as unbound (rather than lifting a lie).
+    expect(() =>
+      liftPython("def f(flag: bool) -> int:\n    if flag:\n        x = 1\n    return x\n"),
+    ).toThrow(/unbound variable|only one arm|may be unbound/);
+  });
+
+  it("does NOT treat an arm-local (assigned and used only within one arm) as a phi", () => {
+    // `w` is used only inside the then-arm — it must not become a phi (which would
+    // wrongly demand a value from the empty else). _check_cryptography's shape.
+    const { sys, py } = rt("def f(n: int) -> None:\n    if (n < 5):\n        w = build(n)\n        emit(w)\n    done()\n");
+    const merge = sys.modules["f"]!.interior.nodes.find((mn) => mn.kind === "merge");
+    expect(merge && "phis" in merge ? merge.phis : undefined).toBeUndefined();
+    expect(py).toContain("w = build(n)");
+    expect(py).toContain("done()");
+  });
+});
+
+describe.skipIf(!hasPython())("lift: walrus in an if-condition (hoisted)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+    return { sys, py: a };
+  };
+
+  it("hoists a whole-condition walrus (`if x := e:`) to a preceding assignment", () => {
+    const { py } = rt('def f(jar: object) -> object:\n    if copy_method := getattr(jar, "copy", None):\n        do(copy_method)\n    log()\n');
+    expect(py).toContain('copy_method = getattr(jar, "copy", None)');
+    expect(py).toContain("if copy_method:");
+  });
+
+  it("hoists a walrus in the leftmost operand of a compound condition", () => {
+    const { py } = rt('def f(cookie: object) -> bool:\n    if (value := load(cookie)) is not None and value.startswith("x"):\n        return True\n    return False\n');
+    expect(py).toContain("value = load(cookie)"); // evaluated once, hoisted
+    expect((py.match(/load\(cookie\)/g) ?? []).length).toBe(1);
+  });
+
+  it("refuses a walrus in a short-circuited position (`… and (x := e)`)", () => {
+    expect(() =>
+      liftPython("def f(a: object) -> bool:\n    if a and (b := get()):\n        return True\n    return False\n"),
+    ).toThrow(/short-circuited|walrus/);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: module-scope free identifiers used as values", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a builtin used as a value (isinstance's type arg) and round-trips", () => {
+    const { py } = rt("def is_text(x: str) -> bool:\n    return isinstance(x, str)\n");
+    expect(py).toContain("isinstance(x, str)");
+  });
+
+  it("lifts an imported name used as a value and round-trips", () => {
+    const { py } = rt("from .compat import builtin_str\ndef check(s: str) -> bool:\n    return isinstance(s, builtin_str)\n");
+    expect(py).toContain("isinstance(s, builtin_str)");
+  });
+
+  it("lifts a sibling class referenced by name and round-trips", () => {
+    const { py } = rt("class Base:\n    pass\ndef make() -> None:\n    register(Base)\n");
+    expect(py).toContain("register(Base)");
+  });
+
+  it("still refuses a genuinely unbound name (not a builtin / module-scope binding)", () => {
+    expect(() => liftPython("def f() -> int:\n    return undefined_thing\n")).toThrow(/unbound variable/);
+  });
+
+  it("dunder methods and acronym class names round-trip verbatim (no re-casing)", () => {
+    const { py } = rt("class HTTPError(IOError):\n    def __init__(self, *args) -> None:\n        super().__init__(*args)\n");
+    expect(py).toContain("class HTTPError(IOError):");
+    expect(py).toContain("def __init__(self, *args)");
   });
 });
 
@@ -1594,8 +1844,22 @@ describe.skipIf(!hasPython())("lift: exceptions full — typed except / else / f
     expect(transpile(sys, "ts")).toContain("instanceof UnicodeEncodeError");
   });
 
-  it("refuses a value merged across try/except arms (no merge node)", () => {
-    expect(() => liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except (TypeError, AttributeError):\n        x = True\n    return x\n")).toThrow(/merging a value across the try/);
+  it("lifts a value merged across try/except arms (try-value-merge phi) and round-trips", () => {
+    const sys = liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except (TypeError, AttributeError):\n        x = True\n    return x\n");
+    expect(validateSystem(sys).ok).toBe(true);
+    const tryNode = sys.modules["g"]!.interior.nodes.find((n) => n.kind === "try");
+    expect(tryNode && "phis" in tryNode ? tryNode.phis : undefined).toEqual(["x"]);
+    const a = transpile(sys, "python");
+    expect(a).toContain("x = parse()");
+    expect(a).toContain("x = True");
+    expect(a).toContain("return x");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("still refuses a try-value-merge when a finally is present (no clean phi home)", () => {
+    expect(() =>
+      liftPython("def g() -> bool:\n    try:\n        x = parse()\n    except TypeError:\n        x = True\n    finally:\n        cleanup()\n    return x\n"),
+    ).toThrow(/merging a value across the try/);
   });
 
   it("refuses multiple separate except clauses (deferred)", () => {
@@ -1896,8 +2160,10 @@ describe.skipIf(!hasPython())("lift: refuses closures / lambdas / cross-scope (i
   it("refuses a `nonlocal` declaration (cross-scope mutation)", () => {
     expect(() => liftPython("def f() -> None:\n    x = 0\n    nonlocal y\n    y = x\n")).toThrow(/nonlocal declaration/);
   });
-  it("refuses a `del` statement", () => {
-    expect(() => liftPython("def f(d: dict, k: str) -> None:\n    del d[k]\n")).toThrow(/del/);
+  it("still refuses a bare-name `del x` (removes a binding — a scope op)", () => {
+    // `del d[k]` / `del obj.attr` now lift (see the del-statement tests); a bare
+    // name delete removes a binding and stays refused.
+    expect(() => liftPython("def f(x: int) -> None:\n    del x\n")).toThrow(/bare name/);
   });
 });
 
@@ -1964,7 +2230,9 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
     expect(() => liftTypeScript(src)).toThrow(/unsupported throw/);
   });
 
-  it("refuses a post-branch merge (statements after a non-escaping branch)", () => {
+  it("lifts a post-branch control merge (statements after a non-escaping branch) and round-trips (TS)", () => {
+    // A branch whose arms both fall through, followed by more code, is a control
+    // merge — now represented by a `merge` node (was refused before).
     const src = [
       "export function f(n: number): void {",
       "  if ((n < 0)) {",
@@ -1973,7 +2241,32 @@ describe("lift: rejects out-of-scope code (fails loudly, never lies)", () => {
       "  console.log(n);",
       "}",
     ].join("\n");
-    expect(() => liftTypeScript(src)).toThrow(/control-flow merge/);
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(codeA).toBe(`${src}\n`); // exact fixed point (trailing newline)
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA);
+    expect(sys.modules["f"]!.interior.nodes.some((n) => n.kind === "merge")).toBe(true);
+  });
+
+  it("lifts a branch data-merge (φ: a value assigned differently in each arm, read after) and round-trips (TS)", () => {
+    const src = [
+      "export function pick(flag: boolean, a: string, b: string): string {",
+      "  let out = a;",
+      "  if (flag) {",
+      "    out = a;",
+      "  } else {",
+      "    out = b;",
+      "  }",
+      "  return out;",
+      "}",
+    ].join("\n");
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const codeA = transpile(sys, "ts");
+    expect(transpile(liftTypeScript(codeA), "ts")).toBe(codeA); // fixed point
+    const merge = sys.modules["pick"]!.interior.nodes.find((n) => n.kind === "merge");
+    expect(merge && "phis" in merge ? merge.phis : undefined).toEqual(["out"]);
   });
 
   it("lifts try/finally and round-trips from TypeScript (item 20)", () => {
@@ -2096,14 +2389,32 @@ describe.skipIf(!hasPython())("lift: method & attribute access on self/locals (P
     expect(codeA).toContain("return helper(obj.name())");
   });
 
-  it("refuses a bare `self` value (no IR source yet)", () => {
+  it("lifts a bare `self` value (passed as an argument) via selfRef and round-trips", () => {
     const src = "class C:\n    def f(self) -> None:\n        sink(self)\n";
-    expect(() => transpile(liftPython(src), "python")).toThrow(/bare "self"\/"this"/);
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("sink(self)");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+    expect(sys.modules["C.f"]!.interior.nodes.some((n) => n.kind === "selfRef")).toBe(true);
   });
 
-  it("refuses an attribute read on an imported name (package value reference)", () => {
+  it("lifts an attribute read on an imported name (package value reference) and round-trips", () => {
     const src = "import sys\ndef f() -> int:\n    return sys.maxsize\n";
-    expect(() => liftPython(src)).toThrow();
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain("return sys.maxsize");
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
+  });
+
+  it("lifts a package member-call chain (os.environ.get) and round-trips", () => {
+    const src = 'import os\ndef f() -> str:\n    return os.environ.get("NETRC")\n';
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(a).toContain('return os.environ.get("NETRC")');
+    expect(transpile(liftPython(a), "python")).toBe(a); // fixed point
   });
 
   it("lifts a bare `return` (void early exit, item 18) and round-trips", () => {
@@ -2157,9 +2468,14 @@ describe("lift: method & attribute access on self/locals (TS)", () => {
     expect(codeA).toContain("return s.trim().toLowerCase();");
   });
 
-  it("refuses a bare `this` value (no IR source yet)", () => {
+  it("lifts a bare `this` value (passed as an argument) via selfRef and round-trips", () => {
     const src = "export class C {\n  f(): void {\n    sink(this);\n  }\n}\n";
-    expect(() => transpile(liftTypeScript(src), "ts")).toThrow(/bare "self"\/"this"/);
+    const sys = liftTypeScript(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "ts");
+    expect(a).toContain("sink(this)");
+    expect(transpile(liftTypeScript(a), "ts")).toBe(a); // fixed point
+    expect(sys.modules["C.f"]!.interior.nodes.some((n) => n.kind === "selfRef")).toBe(true);
   });
 });
 

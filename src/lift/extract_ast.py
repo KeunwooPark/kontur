@@ -150,8 +150,20 @@ def expr(e):
         return {"t": "index", "obj": expr(e.value), "key": expr(e.slice)}
     if isinstance(e, ast.BinOp) and type(e.op) in BINOP:
         return {"t": "bin", "op": BINOP[type(e.op)], "a": expr(e.left), "b": expr(e.right)}
-    if isinstance(e, ast.Compare) and len(e.ops) == 1 and type(e.ops[0]) in CMP:
-        return {"t": "bin", "op": CMP[type(e.ops[0])], "a": expr(e.left), "b": expr(e.comparators[0])}
+    if isinstance(e, ast.Compare) and all(type(o) in CMP for o in e.ops):
+        # A chained comparison `a <= b < c` desugars to `(a <= b) and (b < c)` — a
+        # source-level fixed point (re-lift sees the `and` form; the `and` chain is
+        # stable). The desugar EVALUATES each middle operand TWICE, so it is refused
+        # unless the middle operands are side-effect-free (never double-run a call).
+        operands = [e.left] + list(e.comparators)
+        for mid in operands[1:-1]:
+            if not is_pure(mid):
+                raise SystemExit("lift(py): unsupported chained comparison with a non-pure middle operand (would double-evaluate a side effect)")
+        terms = [{"t": "bin", "op": CMP[type(o)], "a": expr(operands[i]), "b": expr(operands[i + 1])} for i, o in enumerate(e.ops)]
+        cur = terms[0]
+        for t in terms[1:]:
+            cur = {"t": "bin", "op": "and", "a": cur, "b": t}
+        return cur
     if isinstance(e, ast.BoolOp):
         op = "and" if isinstance(e.op, ast.And) else "or"
         cur = expr(e.values[0])
@@ -207,22 +219,17 @@ def expr(e):
         return iter_comp(e)
     if isinstance(e, ast.Call) and call_name(e.func) is not None:
         return {"t": "call", "name": call_name(e.func), **call_args(e)}
-    # A method call on a self/local receiver: `recv.method(args)`. The imported-base
-    # case (`pkg.fn(...)`) was taken above via call_name; what remains is a receiver
-    # we model as a value flowing into the call. A bare imported name as the receiver
-    # of a deeper read is a package value reference we do not model yet (see below).
+    # A method call on a receiver: `recv.method(args)`. The direct imported-base call
+    # (`pkg.fn(...)`) was taken above via call_name and tagged EXTERNAL; what remains
+    # is a receiver value flowing into the call — including a DEEPER package member
+    # chain (`os.environ.get(x)`), where the imported base `os` becomes a value
+    # reference (a globalRef, resolved in to-ir) and `os.environ` an attribute read.
     if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute):
-        root = attr_root(e.func.value)
-        if root is not None and root.id in IMPORTED_NAMES:
-            raise SystemExit("lift(py): unsupported call on an imported value (package member chain, deferred): " + ast.dump(e.func))
         return {"t": "call", "name": e.func.attr, **call_args(e), "recv": expr(e.func.value)}
-    # A general attribute read `obj.attr` (self.attr was taken above as stateGet).
-    # A read off an imported name (`sys.maxsize`) is a package value reference with
-    # no receiver wire — a distinct construct, deferred, refused loudly.
+    # A general attribute read `obj.attr` (self.attr was taken above as stateGet). A
+    # read off an imported name (`sys.pypy_version_info`) is a package value reference:
+    # the base `sys` lifts to a value reference (globalRef), and this is an attrGet on it.
     if isinstance(e, ast.Attribute):
-        root = attr_root(e.value)
-        if root is not None and root.id in IMPORTED_NAMES:
-            raise SystemExit("lift(py): unsupported attribute read on an imported name (package value reference, deferred): " + ast.dump(e))
         return {"t": "attr", "obj": expr(e.value), "name": e.attr}
     raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
 
@@ -271,18 +278,27 @@ def joined_str(e):
     template literal (see `liftTemplate` in ast-from-ts.ts). The IR has no
     interpolation node; `concat` is the string-join effect, emitted as `+` by each
     backend. Empty fixed parts are dropped so the chain carries only text-producing
-    pieces; an f-string with no parts is the empty string. A conversion (`{x!r}`)
-    or a format spec (`{x:.2f}`) carries formatting that `concat` cannot represent,
-    so refuse it loudly rather than silently drop it."""
+    pieces; an f-string with no parts is the empty string. A conversion (`{x!r}` /
+    `{x!s}` / `{x!a}`) desugars to the matching builtin call (`repr(x)` / `str(x)` /
+    `ascii(x)`); a format spec (`{x:08x}`) desugars to `format(x, "08x")`. Both are
+    source-level fixed points (the desugared call re-lifts unchanged), so the whole
+    f-string collapses to a `concat` chain over text and these calls."""
+    conv_fn = {114: "repr", 115: "str", 97: "ascii"}  # ord('r'/'s'/'a')
     parts = []
     for v in e.values:
         if isinstance(v, ast.Constant):
             if v.value != "":
                 parts.append({"t": "lit", "value": v.value})
         elif isinstance(v, ast.FormattedValue):
-            if v.conversion != -1 or v.format_spec is not None:
-                raise SystemExit("lift(py): unsupported f-string conversion/format spec (e.g. {x!r} / {x:.2f}; not representable as concat)")
-            parts.append(expr(v.value))
+            piece = expr(v.value)
+            # A `!r`/`!s`/`!a` conversion wraps the value in repr()/str()/ascii().
+            if v.conversion != -1:
+                piece = {"t": "call", "name": conv_fn[v.conversion], "args": [piece]}
+            # A `:spec` format spec wraps in format(value, spec); the spec is itself
+            # an f-string (usually a constant), lifted the same way.
+            if v.format_spec is not None:
+                piece = {"t": "call", "name": "format", "args": [piece, joined_str(v.format_spec)]}
+            parts.append(piece)
         else:
             raise SystemExit("lift(py): unsupported f-string part: " + ast.dump(v))
     if not parts:
@@ -306,12 +322,66 @@ def range_stop_to(stop):
 
 
 def stmt(s):
-    """Lower a statement and stamp its source span (provenance) onto the result."""
-    d = _stmt(s)
+    """Lower a source statement to ONE OR MORE neutral statements (a construct like
+    a chained lvalue assignment or a statement-level walrus desugars to several) and
+    stamp the source span (provenance) on each."""
+    ds = _stmt(s)
+    if not isinstance(ds, list):
+        ds = [ds]
     sp = span(s)
     if sp is not None:
-        d["span"] = sp
-    return d
+        for d in ds:
+            d.setdefault("span", sp)
+    return ds
+
+
+def stmts(src):
+    """Lower a list of source statements, flattening any that desugar to several."""
+    return [d for x in src for d in stmt(x)]
+
+
+def hoist_walruses(cond):
+    """Lift walrus assignments (`x := e`) out of a condition. Each walrus in an
+    UNCONDITIONALLY-evaluated position (the whole condition, the leftmost operand of
+    an `and`/`or`, a comparison's left/first-comparator, under a unary op) is hoisted
+    to a preceding `let x = e` and replaced by `x` in the rewritten condition — so
+    `if x := e:` → `x = e; if x:` and `if (v := c) is not None and …:` →
+    `v = c; if v is not None and …:` (a source-level fixed point). A walrus in a
+    short-circuited position (after `and`/`or`, in a ternary branch) is refused —
+    hoisting it would change when its side effect runs. Returns (assign-stmts, cond)."""
+    assigns = []
+
+    def walk(node, safe):
+        if isinstance(node, ast.NamedExpr):
+            if not safe:
+                raise SystemExit("lift(py): unsupported walrus in a short-circuited position (`… and (x := e)`, deferred)")
+            inner = walk(node.value, True)
+            assigns.append({"t": "let", "name": node.target.id, "expr": expr(inner)})
+            return ast.copy_location(ast.Name(id=node.target.id, ctx=ast.Load()), node)
+        if isinstance(node, ast.BoolOp):
+            node.values = [walk(v, safe and i == 0) for i, v in enumerate(node.values)]
+            return node
+        if isinstance(node, ast.IfExp):
+            node.test = walk(node.test, safe)
+            node.body = walk(node.body, False)
+            node.orelse = walk(node.orelse, False)
+            return node
+        if isinstance(node, ast.Compare):
+            node.left = walk(node.left, safe)
+            node.comparators = [walk(c, safe and i == 0) for i, c in enumerate(node.comparators)]
+            return node
+        if isinstance(node, ast.UnaryOp):
+            node.operand = walk(node.operand, safe)
+            return node
+        # Any other position: a walrus nested here is neither clearly safe nor
+        # rewritten, so refuse rather than mis-hoist it.
+        for child in ast.walk(node):
+            if isinstance(child, ast.NamedExpr):
+                raise SystemExit("lift(py): unsupported walrus in an unhandled condition position (deferred)")
+        return node
+
+    new_cond = walk(cond, True)
+    return assigns, new_cond
 
 
 def _stmt(s):
@@ -331,7 +401,33 @@ def _stmt(s):
     if isinstance(s, ast.Assign) and len(s.targets) > 1:
         if all(isinstance(t, ast.Name) for t in s.targets):
             return {"t": "chain", "names": [t.id for t in s.targets], "value": expr(s.value)}
-        raise SystemExit("lift(py): unsupported chained assignment target (only plain names)")
+        # Mixed chain `a = obj.attr = d[k] = value`: evaluate the value ONCE into the
+        # first plain-name target, then assign every other target (name / attr /
+        # subscript lvalue) from that holder — a source-level fixed point (re-lift
+        # sees the desugared statements). An all-lvalue chain (no name to hold the
+        # value once) is refused.
+        holders = [t.id for t in s.targets if isinstance(t, ast.Name)]
+        if not holders:
+            raise SystemExit("lift(py): unsupported chained assignment with no plain-name target (deferred)")
+        holder = holders[0]
+        held = {"t": "var", "name": holder}
+        out = [{"t": "let", "name": holder, "expr": expr(s.value)}]
+        for t in s.targets:
+            if isinstance(t, ast.Name):
+                if t.id != holder:
+                    out.append({"t": "assign", "name": t.id, "expr": held})
+            elif isinstance(t, ast.Attribute):
+                if isinstance(t.value, ast.Name) and t.value.id == "self":
+                    out.append({"t": "stateSet", "attr": t.attr, "value": held})
+                else:
+                    out.append({"t": "attrSet", "obj": expr(t.value), "attr": t.attr, "value": held})
+            elif isinstance(t, ast.Subscript):
+                if isinstance(t.slice, ast.Slice):
+                    raise SystemExit("lift(py): unsupported slice-assignment target in a chain (deferred)")
+                out.append({"t": "indexSet", "obj": expr(t.value), "key": expr(t.slice), "value": held})
+            else:
+                raise SystemExit("lift(py): unsupported chained assignment target")
+        return out
     # Sequence unpacking `a, b = value` (a tuple/list target). Each name binds to
     # the corresponding element of `value` -> a `destructure` (the `unpack` node).
     # Only plain names are modelled: a starred target (`a, *rest = …`) or a nested
@@ -406,12 +502,13 @@ def _stmt(s):
             return {"t": "return"}
         return {"t": "return", "expr": expr(s.value)}
     if isinstance(s, ast.If):
-        return {
+        hoisted, cond = hoist_walruses(s.test)
+        return hoisted + [{
             "t": "if",
-            "cond": expr(s.test),
-            "then": [stmt(x) for x in s.body],
-            "else": [stmt(x) for x in s.orelse],
-        }
+            "cond": expr(cond),
+            "then": stmts(s.body),
+            "else": stmts(s.orelse),
+        }]
     if isinstance(s, ast.For) and isinstance(s.iter, ast.Call) and isinstance(s.iter.func, ast.Name) and s.iter.func.id == "range":
         args = s.iter.args
         return {
@@ -419,14 +516,14 @@ def _stmt(s):
             "varName": s.target.id,
             "from": expr(args[0]),
             "to": range_stop_to(args[1]),
-            "body": [stmt(x) for x in s.body],
+            "body": stmts(s.body),
         }
     if isinstance(s, ast.While):
         # A condition-driven loop. The IR `while` node carries only a predicate;
         # a `while...else` is control flow with no IR node, refused rather than dropped.
         if s.orelse:
             raise SystemExit("lift(py): unsupported while/else (no IR node for the else clause)")
-        return {"t": "while", "cond": expr(s.test), "body": [stmt(x) for x in s.body]}
+        return {"t": "while", "cond": expr(s.test), "body": stmts(s.body)}
     if isinstance(s, ast.For):
         # A non-range `for x in iter:` is a collection-driven loop (foreach). A
         # single Name target binds `varName`; a tuple/list target (`for k, v in …`)
@@ -434,7 +531,7 @@ def _stmt(s):
         # no IR node, so refuse it rather than drop it.
         if s.orelse:
             raise SystemExit("lift(py): unsupported for/else (no IR node for the else clause)")
-        out = {"t": "foreach", "iter": expr(s.iter), "body": [stmt(x) for x in s.body]}
+        out = {"t": "foreach", "iter": expr(s.iter), "body": stmts(s.body)}
         if isinstance(s.target, ast.Name):
             out["varName"] = s.target.id
         else:
@@ -488,8 +585,8 @@ def _stmt(s):
         h = s.handlers[0]
         out = {
             "t": "try",
-            "body": [stmt(x) for x in s.body],
-            "handler": [stmt(x) for x in h.body],
+            "body": stmts(s.body),
+            "handler": stmts(h.body),
         }
         # The caught type(s): a bare `except:` or `except Exception:` is catch-all
         # (no errorTypes); a (possibly dotted) name, or a tuple of them, is a typed
@@ -504,9 +601,9 @@ def _stmt(s):
         if h.name:
             out["catchParam"] = h.name
         if s.orelse:
-            out["orelse"] = [stmt(x) for x in s.orelse]
+            out["orelse"] = stmts(s.orelse)
         if s.finalbody:
-            out["finalbody"] = [stmt(x) for x in s.finalbody]
+            out["finalbody"] = stmts(s.finalbody)
         return out
     if isinstance(s, ast.With):
         # A context-managed block `with ctx as r: body`. Only a single context
@@ -516,13 +613,18 @@ def _stmt(s):
         if len(s.items) != 1:
             raise SystemExit("lift(py): unsupported with multiple context managers (`with a, b:`, deferred)")
         item = s.items[0]
-        out = {"t": "with", "context": expr(item.context_expr), "body": [stmt(x) for x in s.body]}
+        out = {"t": "with", "context": expr(item.context_expr), "body": stmts(s.body)}
         if item.optional_vars is not None:
             if not isinstance(item.optional_vars, ast.Name):
                 raise SystemExit("lift(py): unsupported with-target (only a single `as name`, not unpacking)")
             out["resource"] = item.optional_vars.id
         return out
     if isinstance(s, ast.Pass):
+        return {"t": "pass"}
+    # A bare `...` (Ellipsis) statement is a no-op placeholder body — common in
+    # `@overload` / Protocol stubs (`def get(...) -> _VT: ...`). Model it as `pass`
+    # (a no-op, behaviourally identical); it re-emits `pass`, a stable fixed point.
+    if isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and s.value.value is Ellipsis:
         return {"t": "pass"}
     if isinstance(s, ast.Break):
         return {"t": "break"}
@@ -548,7 +650,20 @@ def _stmt(s):
         kind = "global" if isinstance(s, ast.Global) else "nonlocal"
         raise SystemExit("lift(py): unsupported " + kind + " declaration (cross-scope mutation has no IR node, deferred)")
     if isinstance(s, ast.Delete):
-        raise SystemExit("lift(py): unsupported `del` statement (deferred)")
+        # `del obj[key]` / `del obj.attr` are control-sequenced effects. A bare-name
+        # delete (`del x`) removes a binding — a scope op with no IR node. Multiple
+        # targets (`del a, b`) are refused (rare); a single subscript/attribute is
+        # modelled. Both refusals are honest deferrals.
+        if len(s.targets) != 1:
+            raise SystemExit("lift(py): unsupported multi-target `del` (deferred)")
+        t = s.targets[0]
+        if isinstance(t, ast.Subscript):
+            if isinstance(t.slice, ast.Slice):
+                raise SystemExit("lift(py): unsupported slice `del` target (deferred)")
+            return {"t": "delIndex", "obj": expr(t.value), "key": expr(t.slice)}
+        if isinstance(t, ast.Attribute):
+            return {"t": "delAttr", "obj": expr(t.value), "attr": t.attr}
+        raise SystemExit("lift(py): unsupported `del` of a bare name (removes a binding — a scope op with no IR node, deferred)")
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 
@@ -583,6 +698,10 @@ def default_expr(node):
     exclusively. A richer default expression refuses loudly rather than lifting to
     a lie (deferred to a later roadmap item)."""
     if isinstance(node, ast.Constant):
+        # An `...` (Ellipsis) default is a type-stub placeholder (`x: int = ...`), not
+        # a JSON-serializable literal — refuse cleanly rather than crash the extractor.
+        if node.value is Ellipsis:
+            raise SystemExit("lift(py): unsupported `...` (Ellipsis) default value (type-stub placeholder, deferred)")
         return {"t": "lit", "value": node.value}
     if isinstance(node, ast.Name):
         return {"t": "var", "name": node.id}
@@ -591,22 +710,28 @@ def default_expr(node):
 
 def params_of(f, is_method):
     """The full parameter list as neutral-AST params, in declaration order:
-    positional(/keyword) params, then `*args`, then keyword-only params, then
-    `**kwargs`. Defaults, the `*`/`**` markers, and keyword-only-ness are captured
-    so the signature round-trips. Positional-only params (the rare `x, /`) have no
-    IR home yet and refuse loudly."""
+    positional-only params (before `/`), then positional(/keyword) params, then
+    `*args`, then keyword-only params, then `**kwargs`. Defaults, the `/`/`*`/`**`
+    markers, and keyword-/positional-only-ness are captured so the signature
+    round-trips."""
     a = f.args
-    if a.posonlyargs:
-        raise SystemExit("lift(py): unsupported positional-only parameter (not yet in the IR)")
+    posonly = list(a.posonlyargs)
+    # A method's leading `self` is implicit in the IR; drop it wherever it leads.
+    # Defaults align to the TAIL of (posonly + args), so dropping the never-defaulted
+    # head keeps them lined up.
+    if is_method and (posonly or a.args):
+        head = posonly if posonly else a.args
+        if head and head[0].arg == "self":
+            del head[0]
     normal = a.args
-    # A method's leading `self` is implicit in the IR; drop it. Defaults align to
-    # the tail of `normal`, so removing the (never-defaulted) head keeps them lined up.
-    if is_method and normal and normal[0].arg == "self":
-        normal = normal[1:]
     params = []
-    first_default = len(normal) - len(a.defaults)
-    for i, arg in enumerate(normal):
+    # Defaults fill the tail across posonly+normal combined (Python aligns them so).
+    combined = posonly + normal
+    first_default = len(combined) - len(a.defaults)
+    for i, arg in enumerate(combined):
         p = {"name": arg.arg, "type": map_type(arg.annotation)}
+        if i < len(posonly):
+            p["positionalOnly"] = True
         if i >= first_default:
             p["default"] = default_expr(a.defaults[i - first_default])
         params.append(p)
@@ -630,11 +755,17 @@ def decorators_of(node):
     are REFUSED: they drop/rename the implicit receiver, so they change the
     parameter contract rather than just decorate it — a separate concern from
     metadata capture, deferred. Reconstructed via `ast.unparse`, which is
-    idempotent on its own output, so the round-trip is a fixed point."""
+    idempotent on its own output, so the round-trip is a fixed point.
+
+    `@staticmethod` IS captured now: a static method simply has no implicit receiver
+    (no `self`), which the extractor already preserves (self is dropped only when the
+    first param is literally named `self`) and the emitter honours (no `self`
+    injection when `staticmethod` decorates the method). `@classmethod` stays refused
+    — it renames the receiver to `cls`, a distinct receiver model, deferred."""
     out = []
     for d in node.decorator_list:
-        if isinstance(d, ast.Name) and d.id in ("staticmethod", "classmethod"):
-            raise SystemExit("lift(py): unsupported @" + d.id + " (alters the implicit receiver; not yet modelled)")
+        if isinstance(d, ast.Name) and d.id == "classmethod":
+            raise SystemExit("lift(py): unsupported @classmethod (renames the implicit receiver to cls; not yet modelled)")
         out.append(ast.unparse(d))
     return out
 
@@ -644,7 +775,7 @@ def func(f, is_method=False):
     params = params_of(f, is_method)
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
     doc, body = docstring_of(f.body)
-    out = {"name": f.name, "params": params, "returns": returns, "body": [stmt(x) for x in body]}
+    out = {"name": f.name, "params": params, "returns": returns, "body": stmts(body)}
     if decorators:
         out["decorators"] = decorators
     if doc is not None:
@@ -657,6 +788,16 @@ def func(f, is_method=False):
     if sp is not None:
         out["span"] = sp
     return out
+
+
+def is_pure(node):
+    """True if evaluating `node` has no observable side effect (safe to duplicate).
+    Conservative: any call / await / yield / walrus / comprehension makes it impure."""
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr,
+                          ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            return False
+    return True
 
 
 def dotted_name(node):
@@ -682,10 +823,12 @@ def klass(c):
     decorators = decorators_of(c)
     bases = []
     for b in c.bases:
-        name = dotted_name(b)
-        if name is None:
-            raise SystemExit("lift(py): unsupported base class expression (only a name or dotted name is modelled, not e.g. Generic[T])")
-        bases.append(name)
+        # A plain/dotted name (`Base`, `abc.ABC`) is captured as-is; a subscripted
+        # generic base (`Generic[_VT]`, `MutableMapping[str, _VT]`, `dict[str, _VT]`)
+        # is captured VERBATIM via ast.unparse — an opaque type expression the IR
+        # re-emits without analysing, exactly like a decorator. ast.unparse is
+        # idempotent on its own output, so the base round-trips as a fixed point.
+        bases.append(dotted_name(b) or ast.unparse(b))
     fields = []
     methods = []
     doc, body = docstring_of(c.body)
@@ -693,6 +836,15 @@ def klass(c):
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
             fields.append({"name": n.target.id, "type": map_type(n.annotation)})
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # `@overload` methods are type-checker-only stubs (bodies are `...`),
+            # ERASED at runtime — only the final real implementation runs. Keeping
+            # them would create several methods of the same name (a duplicate-id
+            # collision). Drop them: the real method carries the behaviour, and the
+            # class map stays accurate. (Behaviourally faithful; the type-overload
+            # annotations are the only thing lost — types are labels here anyway.)
+            decs = decorators_of(n)
+            if any(d == "overload" or d.endswith(".overload") for d in decs):
+                continue
             methods.append(func(n, is_method=True))
         elif isinstance(n, ast.Pass):
             continue

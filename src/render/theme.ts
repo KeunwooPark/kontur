@@ -24,6 +24,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "function", glyph: "ƒ", label: "function" },
   { kind: "method", glyph: "⟜", label: "method call" },
   { kind: "branch", glyph: "◆", label: "branch" },
+  { kind: "merge", glyph: "◇", label: "merge — branch join / φ" },
   { kind: "loop", glyph: "↻", label: "loop" },
   { kind: "while", glyph: "⟲", label: "while loop" },
   { kind: "foreach", glyph: "∈", label: "for-each loop" },
@@ -38,6 +39,7 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "yield", glyph: "⤳", label: "yield — generator output" },
   { kind: "await", glyph: "⌛", label: "await — resolve awaitable" },
   { kind: "globalRef", glyph: "𝑔", label: "global — module constant" },
+  { kind: "selfRef", glyph: "◈", label: "self — ambient receiver value" },
   { kind: "effect", glyph: "▮", label: "effect" },
   { kind: "const", glyph: "#", label: "const" },
   { kind: "select", glyph: "⋔", label: "select — value conditional" },
@@ -54,6 +56,8 @@ export const KINDS: { kind: StyledKind; glyph: string; label: string }[] = [
   { kind: "attrGet", glyph: "↦", label: "read member" },
   { kind: "attrSet", glyph: "↤", label: "write member" },
   { kind: "indexSet", glyph: "⊐", label: "index write — subscript assign" },
+  { kind: "delIndex", glyph: "⊘", label: "del — delete element" },
+  { kind: "delAttr", glyph: "⊗", label: "del — delete attribute" },
   { kind: "unpack", glyph: "⇶", label: "unpack — destructuring bind" },
   { kind: "broadcast", glyph: "⇉", label: "broadcast — chained assignment" },
 ];
@@ -130,6 +134,7 @@ export const paper: Theme = {
     function: { fill: "#e4eff7", stroke: "#0072b2" }, // blue
     method: { fill: "#e4eff7", stroke: "#0072b2" }, // blue — a call, like function
     branch: { fill: "#fbf1da", stroke: "#e69f00" }, // amber
+    merge: { fill: "#f5ecd6", stroke: "#b07d10" }, // deeper amber — the branch join (φ)
     loop: { fill: "#f7e7f0", stroke: "#cc79a7" }, // reddish purple
     while: { fill: "#e3f1fb", stroke: "#56b4e9" }, // sky blue — the other loop
     foreach: { fill: "#eef6e2", stroke: "#5a9216" }, // olive green — the collection loop
@@ -144,6 +149,7 @@ export const paper: Theme = {
     yield: { fill: "#eaf3e8", stroke: "#3f8a4a" }, // green — generator output (stream)
     await: { fill: "#e4eff7", stroke: "#0072b2" }, // blue — a call-like value transform
     globalRef: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey — a constant reference
+    selfRef: { fill: "#e6e7fb", stroke: "#4b4fc4" }, // state-family indigo — the receiver as a value
     effect: { fill: "#dcf1ea", stroke: "#009e73" }, // bluish green
     const: { fill: "#eef0f2", stroke: "#6b7280" }, // neutral grey
     select: { fill: "#f6ead0", stroke: "#a86b00" }, // deep amber — a data conditional
@@ -158,6 +164,9 @@ export const paper: Theme = {
     slice: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // a subscript write shares the collection teal (it writes into a collection).
     indexSet: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    // deletes touch a collection/receiver — share the collection teal.
+    delIndex: { fill: "#daf0f3", stroke: "#0a7d8c" },
+    delAttr: { fill: "#daf0f3", stroke: "#0a7d8c" },
     // unpack destructures a sequence value — share the collection teal.
     unpack: { fill: "#daf0f3", stroke: "#0a7d8c" },
     broadcast: { fill: "#daf0f3", stroke: "#0a7d8c" },
@@ -191,6 +200,7 @@ export const ink: Theme = {
     function: { fill: "#16263f", stroke: "#4f8cf0" },
     method: { fill: "#16263f", stroke: "#4f8cf0" }, // a call, like function
     branch: { fill: "#3a2a12", stroke: "#e0a13a" },
+    merge: { fill: "#33260f", stroke: "#c99433" }, // deeper amber — the branch join (φ)
     loop: { fill: "#2a1c3d", stroke: "#a878e8" },
     while: { fill: "#13283a", stroke: "#56b4e9" },
     foreach: { fill: "#1c2f12", stroke: "#7fb84a" },
@@ -205,6 +215,7 @@ export const ink: Theme = {
     yield: { fill: "#16291a", stroke: "#5aa564" },
     await: { fill: "#16263f", stroke: "#4f8cf0" },
     globalRef: { fill: "#1b1f27", stroke: "#5b6472" },
+    selfRef: { fill: "#1e1f3a", stroke: "#6b6fd0" },
     effect: { fill: "#12301f", stroke: "#3fbf7f" },
     const: { fill: "#1b1f27", stroke: "#5b6472" },
     select: { fill: "#33270f", stroke: "#d09a3a" },
@@ -216,6 +227,8 @@ export const ink: Theme = {
     index: { fill: "#10303a", stroke: "#2bb5c9" },
     slice: { fill: "#10303a", stroke: "#2bb5c9" },
     indexSet: { fill: "#10303a", stroke: "#2bb5c9" }, // subscript write — collection teal
+    delIndex: { fill: "#10303a", stroke: "#2bb5c9" },
+    delAttr: { fill: "#10303a", stroke: "#2bb5c9" },
     unpack: { fill: "#10303a", stroke: "#2bb5c9" }, // destructuring bind — collection teal
     broadcast: { fill: "#10303a", stroke: "#2bb5c9" },
     state: { fill: "#1e1f3a", stroke: "#8b8ff0" },

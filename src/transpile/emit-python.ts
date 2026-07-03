@@ -140,6 +140,10 @@ function stmt(s: Stmt, indent: string): string[] {
       return [`${indent}${expr(s.obj)}.${s.attr} = ${expr(s.value)}`];
     case "indexSet":
       return [`${indent}${expr(s.obj)}[${expr(s.key)}] = ${expr(s.value)}`];
+    case "delIndex":
+      return [`${indent}del ${expr(s.obj)}[${expr(s.key)}]`];
+    case "delAttr":
+      return [`${indent}del ${expr(s.obj)}.${s.attr}`];
     case "destructure":
       return [`${indent}${s.names.map(snake).join(", ")} = ${expr(s.value)}`];
     case "chain":
@@ -229,12 +233,23 @@ function pyParam(p: Param): string {
   return `${snake(p.name)}${anno}${dflt}`;
 }
 
-/** Render the parameter list, inserting a bare `*` before keyword-only params
- *  when no `*args` already separates them. A method takes an implicit `self`. */
+/** Render the parameter list, inserting a `/` after positional-only params and a
+ *  bare `*` before keyword-only params when no `*args` already separates them. A
+ *  method takes an implicit `self`. */
 function pyParams(f: Fn): string {
-  const parts: string[] = f.isMethod ? ["self"] : [];
+  // A method takes an implicit `self` — EXCEPT a @staticmethod, which has no
+  // receiver (its parameters are exactly as written).
+  const isStatic = (f.decorators ?? []).includes("staticmethod");
+  const parts: string[] = f.isMethod && !isStatic ? ["self"] : [];
   let starEmitted = false;
+  let slashPending = false; // positional-only params seen, awaiting the `/` separator
   for (const p of f.params) {
+    if (p.positionalOnly) {
+      slashPending = true;
+      parts.push(pyParam(p));
+      continue;
+    }
+    if (slashPending) { parts.push("/"); slashPending = false; }
     if (p.variadic === "args") starEmitted = true;
     else if (p.keywordOnly && p.variadic === undefined && !starEmitted) {
       parts.push("*");
@@ -242,6 +257,7 @@ function pyParams(f: Fn): string {
     }
     parts.push(pyParam(p));
   }
+  if (slashPending) parts.push("/"); // all params positional-only
   return parts.join(", ");
 }
 
