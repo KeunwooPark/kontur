@@ -64,6 +64,10 @@ interface Ctx {
   varMap: Map<string, string>;
   used: Set<string>;
   knownFns: Set<string>;
+  /** Sibling/imported CLASS names → their module resolves as a constructor link
+   *  (`Session()` → a link to the `Session` class, whose contract is its `__init__`).
+   *  Kept apart from `knownFns` so a class is never mistaken for a plain function. */
+  knownClasses: Set<string>;
   /** qualified module id → its param names (whole project), for wiring link args. */
   moduleParams: Map<string, string[]>;
   /** imported local name → the package it came from (for tagging external calls). */
@@ -72,6 +76,10 @@ interface Ctx {
   localImports: Map<string, LocalImportTarget>;
   /** simple name → fully-qualified module id (identity when ids are bare). */
   qualify: (name: string) => string;
+  /** Nested (local) function name → its lifted module id, in scope only while
+   *  lowering the body that declares it. Resolved BEFORE `knownFns` so a local
+   *  helper shadows a same-named top-level function (lexical scope). */
+  localFns?: Map<string, string>;
   /** Module-scope names usable as a VALUE (a bare identifier not bound locally):
    *  imported names, sibling classes/functions, module constants, and language
    *  builtins. An unbound `var` that IS one lowers to a `globalRef` (emitted
@@ -112,14 +120,18 @@ const BUILTINS = new Set<string>([
 
 export function liftProgram(program: Program, lift: LiftContext = {}): System {
   const knownFns = new Set(program.functions.map((f) => f.name));
+  const knownClasses = new Set(program.classes.map((c) => c.name));
   const localImports = lift.localImports ?? new Map<string, LocalImportTarget>();
   // Qualify ids by source path so two files can each define `helper` without
   // colliding. Identity when no moduleKey is given (single-file / hand-authored).
   const qualify = (name: string): string => (lift.moduleKey ? `${lift.moduleKey}#${name}` : name);
   // Param names keyed by qualified id: start from the project-wide map (so links
-  // into other files wire correctly) and add this file's own functions.
+  // into other files wire correctly) and add this file's own functions. A class
+  // resolves through the SAME map with its constructor's params, so an
+  // instantiation `Session(...)` wires its args to the class's contract.
   const moduleParams = new Map(lift.moduleParams ?? []);
   for (const f of program.functions) moduleParams.set(qualify(f.name), f.params.map((p) => p.name));
+  for (const c of program.classes) moduleParams.set(qualify(c.name), ctorParamNames(c));
   // Map every imported local name to the package it crosses into, so a call
   // through that name is tagged `source`. When the driver has classified imports
   // (it knows the filesystem), use its external map verbatim; otherwise — a
@@ -141,9 +153,12 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
   for (const f of program.functions) freeNames.add(f.name);
   for (const c of program.consts ?? []) freeNames.add(c.name);
   for (const imp of program.imports ?? []) for (const b of imp.bindings) freeNames.add(b.local);
-  const shared = { knownFns, moduleParams, importSource, localImports, qualify, freeNames };
+  const shared = { knownFns, knownClasses, moduleParams, importSource, localImports, qualify, freeNames };
   const modules: Record<string, Module> = {};
-  for (const fn of program.functions) modules[qualify(fn.name)] = lowerFn(fn, shared, lift.origin);
+  for (const fn of program.functions) {
+    const id = qualify(fn.name);
+    modules[id] = lowerFn(fn, shared, lift.origin, modules, id);
+  }
   for (const cls of program.classes) lowerClass(cls, modules, shared, lift.origin);
   // Entry-point canvases: the top-level declarations (free functions + classes),
   // never the methods — those are reached by descending into the class.
@@ -176,7 +191,15 @@ export function liftProgram(program: Program, lift: LiftContext = {}): System {
 }
 
 /** The shared, file-wide resolution state passed to every lowering helper. */
-type Shared = Pick<Ctx, "knownFns" | "moduleParams" | "importSource" | "localImports" | "qualify" | "freeNames">;
+type Shared = Pick<Ctx, "knownFns" | "knownClasses" | "moduleParams" | "importSource" | "localImports" | "qualify" | "freeNames">;
+
+/** A class's constructor parameter names (`__init__` / `constructor`, receiver
+ *  already dropped by the extractor) — the class's public link contract, so an
+ *  instantiation wires its args to these ports. Empty when no constructor. */
+export function ctorParamNames(cls: Class): string[] {
+  const ctor = cls.methods.find((m) => m.name === "__init__" || m.name === "constructor");
+  return ctor ? ctor.params.map((p) => p.name) : [];
+}
 
 /** The package a call name crosses into, or undefined for a local/builtin call.
  *  The base identifier (`name` before any `.`) is what an import binds. */
@@ -205,15 +228,32 @@ function lowerClass(
   const classId = shared.qualify(cls.name);
   for (const m of cls.methods) {
     const methodId = `${classId}.${m.name}`;
-    modules[methodId] = lowerFn(m, shared, origin);
+    modules[methodId] = lowerFn(m, shared, origin, modules, methodId);
     nodes.push({ id: methodId, kind: "module", ref: methodId });
   }
+  // A class's public contract is its CONSTRUCTOR: the `__init__`/`constructor`
+  // params become the class module's data in-ports, so an instantiation link
+  // (`Session(...)`) derives its ports from here and wires its args to them.
+  // These describe the boundary a caller sees; they are NOT wired to the class's
+  // interior (a namespace of state + methods), so they stay data-in — which the
+  // port-boundary invariant already exempts (an unconnected data in-port is valid).
+  const ctor = cls.methods.find((m) => m.name === "__init__" || m.name === "constructor");
+  const ports: Port[] = (ctor?.params ?? []).map((p) => ({
+    name: p.name,
+    type: p.type,
+    io: "in" as const,
+    wire: "data" as const,
+    ...(p.default !== undefined ? { default: p.default } : {}),
+    ...(p.variadic !== undefined ? { variadic: p.variadic } : {}),
+    ...(p.keywordOnly ? { keywordOnly: true } : {}),
+    ...(p.positionalOnly ? { positionalOnly: true } : {}),
+  }));
   modules[classId] = {
     title: cls.name,
     kind: "class",
     ...(cls.bases && cls.bases.length ? { bases: cls.bases } : {}),
     ...(cls.decorators && cls.decorators.length ? { decorators: cls.decorators } : {}),
-    ports: [],
+    ports,
     interior: { nodes, wires: [] },
     ...(cls.doc !== undefined ? { doc: cls.doc } : {}),
     ...(cls.span ? { prov: cls.span } : {}),
@@ -221,7 +261,21 @@ function lowerClass(
   };
 }
 
-function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
+/**
+ * Lower a function (or method) to a Module. When the function declares nested
+ * (local) functions, `modules`/`selfId` let us register each as its own module
+ * (`${selfId}$${name}`) and resolve calls to it as links — so a local helper is
+ * navigable/expandable like any other module. `inheritedLocalFns` carries the
+ * enclosing scope's nested names inward (so a nested function can call a sibling).
+ */
+function lowerFn(
+  fn: Fn,
+  shared: Shared,
+  origin: string | undefined,
+  modules?: Record<string, Module>,
+  selfId?: string,
+  inheritedLocalFns?: Map<string, string>,
+): Module {
   // foldGuards runs BEFORE normalizeReturns so a guard clause + trailing return
   // (`if c: return A` then `return B`) is first folded to `if c: return A else:
   // return B` and THEN collapsed to a tail `return (A if c else B)` in one pass —
@@ -230,9 +284,29 @@ function lowerFn(fn: Fn, shared: Shared, origin: string | undefined): Module {
   fn = normalizeReturns(fn);
   assertNoLoopCarriedState(fn);
   assertNoTryMerge(fn.body, fn.name);
+
+  // Nested (local) functions: register each as its own module and build the
+  // name→id map that resolves calls to them (this scope + any inherited siblings).
+  const localFns = new Map(inheritedLocalFns ?? []);
+  const nested = fn.nested ?? [];
+  if (nested.length && modules && selfId !== undefined) {
+    for (const nf of nested) localFns.set(nf.name, `${selfId}$${nf.name}`);
+    // Register params first so a nested call's args wire to its ports (incl. any
+    // forward/mutual reference between siblings), then lower each nested body.
+    for (const nf of nested) shared.moduleParams.set(localFns.get(nf.name)!, nf.params.map((p) => p.name));
+    for (const nf of nested) {
+      const nid = localFns.get(nf.name)!;
+      const m = lowerFn(nf, shared, origin, modules, nid, localFns);
+      m.nestedIn = selfId;
+      if (nf.captures && nf.captures.length) m.captures = nf.captures;
+      modules[nid] = m;
+    }
+  }
+
   const ctx: Ctx = {
     nodes: [], wires: [], varMap: new Map(), used: new Set(),
     ...shared, counter: { n: 0 }, returnSource: undefined,
+    ...(localFns.size ? { localFns } : {}),
   };
 
   const ports: Port[] = [{ name: "exec", type: "exec", io: "in", wire: "control" }];
@@ -743,18 +817,21 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
   // edge is lost but the call still lifts (drift).
   const hasSpread = (e.starArgs !== undefined && e.starArgs.length > 0) || (e.kwargs ?? []).some((k) => k.name === null);
   const resolved = hasSpread ? undefined : linkTarget(ctx, e.name);
-  // Only a target with a KNOWN parameter contract (a plain function/method) can have
-  // its args wired to named ports. A link to a CLASS module — a constructor call
-  // `Request(...)` — has no param ports (they live on `__init__`), so it falls back
-  // to a stub `function` node (args on bare/kw pins), keeping the call valid (drift:
-  // the cross-file class link is not formed).
+  // A resolved target with a KNOWN parameter contract links. This now includes a
+  // CLASS module — a constructor call `Session(...)` links to the class, whose
+  // contract is its `__init__` params (see `lowerClass`), so the class gains an
+  // in-edge and stops being a top-level root. When the constructor is INHERITED (no
+  // own `__init__`, so the contract is incomplete) an arg may not map to any port;
+  // rather than wire it to a phantom port (invalid IR), the unmappable arg is
+  // dropped (tolerant drift) — the link, and the surfaces-only view, still hold.
   const link = resolved !== undefined && ctx.moduleParams.has(resolved) ? resolved : undefined;
   if (link !== undefined) {
     // Record the call-site name when it differs from the target's declared name —
     // an import alias (`f as g`) or a namespaced member call (`ns.f`) — so the
     // transpiler re-emits it to match the file's verbatim import line. A plain
-    // same-name call carries no `call` (keeps the common case minimal).
-    const call = e.name === bareName(link) ? {} : { call: e.name };
+    // same-name call carries no `call` (keeps the common case minimal). A nested
+    // helper's id carries a `parent$` prefix, so compare against its SIMPLE name.
+    const call = e.name === simpleName(link) ? {} : { call: e.name };
     const id = newNode(ctx, { kind: "module", ref: link, ...call }, idHint, prov);
     // Wire positional args by the CALLEE's param names (port names on its
     // contract), looked up by the resolved target id so a cross-file link wires
@@ -762,12 +839,15 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
     // `*x`/`**x` unpack into a link can't be mapped to fixed ports (deferred).
     if (e.starArgs && e.starArgs.length) throw new Error(`lift: unsupported *args unpack into a call to "${e.name}" (deferred)`);
     const params = ctx.moduleParams.get(link) ?? [];
+    const portSet = new Set(params);
     e.args.forEach((arg, i) => {
-      const port = params[i] ?? `arg${i}`;
+      const port = params[i];
+      if (port === undefined) return; // arg beyond the (incomplete) contract → drop
       ctx.wires.push([lowerExpr(ctx, arg), `${id}:${port}`, "data"]);
     });
     for (const k of e.kwargs ?? []) {
       if (k.name === null) throw new Error(`lift: unsupported **kwargs unpack into a call to "${e.name}" (deferred)`);
+      if (!portSet.has(k.name)) continue; // kwarg not on the (incomplete) contract → drop
       ctx.wires.push([lowerExpr(ctx, k.value), `${id}:${k.name}`, "data"]);
     }
     return id;
@@ -789,7 +869,11 @@ function lowerSequencedCall(ctx: Ctx, e: Extract<Expr, { t: "call" }>, idHint?: 
  *   - a namespaced local import (`import * as util` + `util.foo()` → `util#foo`).
  */
 function linkTarget(ctx: Ctx, name: string): string | undefined {
+  const nested = ctx.localFns?.get(name);
+  if (nested !== undefined) return nested; // a nested helper shadows a top-level name
   if (ctx.knownFns.has(name)) return ctx.qualify(name);
+  // A sibling CLASS name → a constructor link to that class module.
+  if (ctx.knownClasses.has(name)) return ctx.qualify(name);
   const base = name.split(".")[0]!;
   const local = ctx.localImports.get(base);
   if (!local) return undefined;
@@ -803,6 +887,14 @@ function linkTarget(ctx: Ctx, name: string): string | undefined {
 function bareName(id: string): string {
   const hash = id.lastIndexOf("#");
   return hash === -1 ? id : id.slice(hash + 1);
+}
+
+/** The SIMPLE declared name of a module id, also stripping a nested helper's
+ *  `parent$name` prefix: `sessions#merge_hooks$merge_setting` → `merge_setting`. */
+function simpleName(id: string): string {
+  const bare = bareName(id);
+  const dollar = bare.lastIndexOf("$");
+  return dollar === -1 ? bare : bare.slice(dollar + 1);
 }
 
 /** Lower a pure expression, returning the data-source endpoint that yields it. */

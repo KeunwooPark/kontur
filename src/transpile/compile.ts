@@ -58,10 +58,13 @@ export function compile(system: System, originFilter?: string): Program {
     if (!inFile(mod)) continue;
     if (mod.kind === "class") {
       classes.push(compileClass(id, mod, system, methodName));
-    } else if (!methodName.has(id)) {
-      functions.push(new ModuleCompiler(id, mod, system).compile());
+    } else if (!methodName.has(id) && mod.nestedIn === undefined) {
+      const fn = new ModuleCompiler(id, mod, system).compile();
+      attachNested(fn, id, system);
+      functions.push(fn);
     }
-    // else: a method module — emitted within its class above.
+    // else: a method module (emitted within its class) or a nested function
+    // (emitted inside its parent's body via `attachNested`).
   }
   // Imports are reproduced verbatim from the System's fidelity record; the
   // emitters render the `import` lines (prov is editor-only, dropped here). When
@@ -93,9 +96,32 @@ function compileClass(
       const fn = new ModuleCompiler(n.ref, methodMod, system).compile();
       fn.name = methodName.get(n.ref) ?? n.ref;
       fn.isMethod = true;
+      attachNested(fn, n.ref, system);
       return fn;
     });
   return { name: id, fields, methods, ...(mod.bases && mod.bases.length ? { bases: mod.bases } : {}), ...(mod.decorators && mod.decorators.length ? { decorators: mod.decorators } : {}), ...(mod.doc !== undefined ? { doc: mod.doc } : {}) };
+}
+
+/**
+ * Re-nest any lifted nested (local) functions inside their parent Fn's body. A
+ * nested module carries `nestedIn: <parentId>`; we compile each such module and
+ * attach it to `fn.nested` (recursing for deeper nesting). The emitters print
+ * `fn.nested` as `def`s at the top of the body. `captures` is carried through so
+ * the emitter strips those synthetic in-ports from the printed signature — the
+ * body reads them as closure variables again, reproducing the original source.
+ */
+function attachNested(fn: Fn, parentId: string, system: System): void {
+  const kids: Fn[] = [];
+  for (const [nid, m] of Object.entries(system.modules)) {
+    if (m.nestedIn !== parentId) continue;
+    const nf = new ModuleCompiler(nid, m, system).compile();
+    nf.name = m.title; // the bare local name, not the `parent$name` module id
+    nf.nestedIn = parentId;
+    if (m.captures && m.captures.length) nf.captures = m.captures;
+    attachNested(nf, nid, system);
+    kids.push(nf);
+  }
+  if (kids.length) fn.nested = kids;
 }
 
 class ModuleCompiler {
@@ -421,6 +447,10 @@ class ModuleCompiler {
           else stmts.push({ t: "expr", expr: call });
         }
       } else if (node.kind === "function" || node.kind === "module" || node.kind === "method") {
+        // A captured local a nested function reads is bound in the parent just
+        // before the call (it is not passed as an arg — the closure reads it), so
+        // its defining value survives even though the call site drops the arg.
+        if (node.kind === "module") stmts.push(...this.captureInits(node));
         const expr =
           node.kind === "module" ? this.moduleCall(node)
           : node.kind === "method" ? this.methodCall(node)
@@ -527,13 +557,24 @@ class ModuleCompiler {
 
   private moduleCall(node: Extract<Node, { kind: "module" }>): Expr {
     const target = this.system.modules[node.ref]!;
+    // A captured closure variable is an in-port for dataflow, but it is NOT passed
+    // at the call site (the re-nested body reads it as a closure var) — so drop
+    // those args, mirroring how the emitter strips them from the signature.
+    const captures = new Set(target.captures ?? []);
     // Emit an argument for each in-data port that is actually wired. A port left
     // unwired at the call site (an argument relying on the callee's default, or a
     // partial link formed under the tolerant lift) is skipped rather than crashing
     // the compile — keeping the reverse (transpile) robust.
     const args = target.ports
-      .filter((p) => p.io === "in" && p.wire === "data" && this.dataSrc.has(`${node.id}:${p.name}`))
+      .filter((p) => p.io === "in" && p.wire === "data" && !captures.has(p.name) && this.dataSrc.has(`${node.id}:${p.name}`))
       .map((p) => this.resolveInput(node.id, p.name));
+    // A nested (local) function is called by its bare name, never the `parent$name`
+    // module id that `localName(node.ref)` would yield.
+    if (target.nestedIn !== undefined && !node.call) return { t: "call", name: target.title, args };
+    // A CONSTRUCTOR call links to a `class` module: emit the class name VERBATIM
+    // (external ⇒ no snake/camel re-casing), so `Session(...)` / `models.Request(...)`
+    // round-trips with its PascalCase intact.
+    if (target.kind === "class") return { t: "call", name: node.call ?? target.title, args, external: true };
     // Call by the call-site name (`call`) when set — an import alias or a
     // `ns.member` access — else the target's bare local name. `call` is the exact
     // source text, so emit it VERBATIM (like a package call): re-casing would
@@ -541,6 +582,25 @@ class ModuleCompiler {
     // the file's verbatim import line. A bare same-file name is cased normally.
     if (node.call) return { t: "call", name: node.call, args, external: true };
     return { t: "call", name: localName(node.ref), args };
+  }
+
+  /** Bindings for a nested function's captured locals, emitted in the PARENT just
+   *  before the call. A capture is not passed as an argument (the re-nested body
+   *  reads it as a closure variable), so the parent must still bind its value — the
+   *  value flows into the capture in-port from the parent's own dataflow. A capture
+   *  that is already the same-named variable in scope (a parameter) needs no
+   *  re-binding, exactly like a loop-carried self-assign. */
+  private captureInits(node: Extract<Node, { kind: "module" }>): Stmt[] {
+    const target = this.system.modules[node.ref];
+    if (!target?.captures?.length) return [];
+    const out: Stmt[] = [];
+    for (const cap of target.captures) {
+      if (!this.dataSrc.has(`${node.id}:${cap}`)) continue;
+      const expr = this.resolveInput(node.id, cap);
+      if (expr.t === "var" && expr.name === cap) continue; // already in scope
+      out.push({ t: "let", name: cap, expr });
+    }
+    return out;
   }
 
   /** Loop-carried accumulator init, emitted BEFORE the loop: `v = <in_v source>`

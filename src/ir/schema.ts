@@ -403,6 +403,25 @@ export const Module = z
     /** When true, the module is an `async` function/method (Python `async def` /
      *  TS `async function`). Its body may `await`. */
     async: z.boolean().optional(),
+    /**
+     * The module id of the function/method this one was defined INSIDE — set only
+     * on a lifted nested (local) function. A nested function is lifted as its own
+     * first-class module (so it is navigable/expandable) whose id is
+     * `${parentId}$${name}`; `nestedIn` records the parent so the transpiler can
+     * re-nest it inside that parent's body — restoring the original `def`-inside-a-
+     * `def` rather than a hoisted sibling. Absent ⇒ a top-level function/method.
+     */
+    nestedIn: z.string().min(1).optional(),
+    /**
+     * The in-port names that are CAPTURED enclosing variables (closure conversion),
+     * meaningful only on a nested module (`nestedIn` set). Free variables a nested
+     * function reads from its enclosing scope are promoted to trailing in-ports so
+     * the dataflow is explicit on the map; `captures` marks them so the transpiler
+     * STRIPS them from the emitted signature and from call sites — the re-nested
+     * body references them as closure variables again, reproducing the source.
+     * Absent ⇒ the nested function captured nothing.
+     */
+    captures: z.array(z.string().min(1)).optional(),
     /** Provenance for the module as a whole (e.g. a function/method/class def). */
     prov: SourceSpan.optional(),
     /**
