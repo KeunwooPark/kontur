@@ -219,6 +219,26 @@ export interface Fn {
    *  enabling `await` in its body. */
   async?: boolean;
   /**
+   * Nested (local) function definitions to emit at the TOP of this function's body,
+   * before its statements — a `def` inside a `def`. Set by both directions: the
+   * lifter's extractor hoists source nested defs here (for closure analysis), and
+   * the transpiler re-attaches lifted nested modules here so they re-nest. Each is
+   * a full `Fn` and may itself carry `nested` (deeper nesting). Absent ⇒ none.
+   */
+  nested?: Fn[];
+  /** The parent module id when this Fn is a nested (local) function — a marker that
+   *  it is declared inside another function's body (no `export`), mirroring
+   *  `Module.nestedIn`. Absent ⇒ a top-level function or method. */
+  nestedIn?: string;
+  /**
+   * On a nested function, the parameter names that are CAPTURED enclosing variables
+   * (closure conversion) rather than real parameters. The extractor appends them to
+   * `params` so the lift wires them as data in-ports; the emitter STRIPS them from
+   * the printed signature (the re-nested body reads them as closure variables).
+   * Absent ⇒ captured nothing / not a nested function.
+   */
+  captures?: string[];
+  /**
    * Decorators applied to the function/method, outermost first — each the
    * decorator expression carried VERBATIM without its leading `@` (`property`,
    * `app.route('/x')`, `functools.wraps(fn)`), like `Class.bases`: opaque

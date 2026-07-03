@@ -233,10 +233,12 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
     expect(validateSystem(system).ok).toBe(true); // the assembled System stays valid
   });
 
-  it("degrades a constructor call to an imported CLASS into a stub (no broken class link)", () => {
-    // A class module has no callable param ports (they live on `__init__`), so a
-    // constructor call `Widget(x=1)` cannot wire args to a class link. Under the
-    // tolerant lift it becomes a stub `function` node — the System still validates.
+  it("links a constructor call to the imported CLASS, so the class is not a top-level root", () => {
+    // A class's public contract is its constructor: `new Widget(...)` links to the
+    // Widget class module (whose ports derive from `__init__`), so Widget gains an
+    // in-edge and drops out of the navigation roots — reached by descending into
+    // `make`. An INHERITED constructor (Widget declares no `__init__`) leaves the
+    // contract incomplete, so the surplus arg is dropped (tolerant) — still valid.
     const root = writeProject({
       "widget.ts": "export class Widget {\n  render(): number {\n    return 1;\n  }\n}\n",
       "main.ts": [
@@ -252,11 +254,16 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
     const { system, skipped } = liftDirectory(root);
     expect(skipped).toEqual([]);
     expect(validateSystem(system).ok).toBe(true);
+    // The instantiation is a `module` LINK to the class, not an opaque stub.
     const nodes = system.modules["main#make"]!.interior.nodes;
-    const stub = nodes.find(
-      (n): n is Extract<Node, { kind: "function" }> => n.kind === "function" && n.label === "Widget",
+    const link = nodes.find(
+      (n): n is Extract<Node, { kind: "module" }> => n.kind === "module" && n.ref === "widget#Widget",
     );
-    expect(stub).toBeDefined();
+    expect(link).toBeDefined();
+    expect(nodes.some((n) => n.kind === "function" && n.label === "Widget")).toBe(false);
+    // Widget is now referenced, so it is NOT a navigation root; `make` still is.
+    expect(system.features).not.toContain("widget#Widget");
+    expect(system.features).toContain("main#make");
   });
 
   it("does not walk into node_modules or pick up test/declaration files", () => {

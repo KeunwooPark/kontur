@@ -296,18 +296,25 @@ function containsYield(stmts: Stmt[]): boolean {
 }
 
 function fn(f: Fn, indent = ""): string {
-  const params = f.params.map(tsParam).join(", ");
+  // Captured closure variables are IR in-ports, not real params — drop them so the
+  // re-nested function reads them from its enclosing scope (a JS closure).
+  const captures = new Set(f.captures ?? []);
+  const params = f.params.filter((p) => !captures.has(p.name)).map(tsParam).join(", ");
   // A function containing any `yield` is a generator: `function*` / `*method`.
   const star = containsYield(f.body) ? "*" : "";
   const asy = f.async ? "async " : "";
-  // A method drops the `export function` preamble; the class owns it.
+  // A method drops the `export function` preamble; the class owns it. A nested
+  // (local) function is a plain `function` declaration inside the body — never
+  // `export`ed (it is not a module-level binding).
   const head = f.isMethod
     ? `${indent}${asy}${star}${camel(f.name)}(${params}): ${returnType(f)} {`
-    : `${indent}export ${asy}function${star} ${camel(f.name)}(${params}): ${returnType(f)} {`;
+    : `${indent}${f.nestedIn ? "" : "export "}${asy}function${star} ${camel(f.name)}(${params}): ${returnType(f)} {`;
   const lines = f.doc !== undefined ? jsDoc(f.doc, indent) : [];
   // Decorators follow the doc block, each on its own `@<text>` line.
   for (const d of f.decorators ?? []) lines.push(`${indent}@${d}`);
   lines.push(head);
+  // Nested (local) functions are declared first, before the statements calling them.
+  for (const nf of f.nested ?? []) lines.push(...fn(nf, indent + "  ").split("\n"));
   for (const s of f.body) lines.push(...stmt(s, indent + "  "));
   lines.push(`${indent}}`);
   return lines.join("\n");

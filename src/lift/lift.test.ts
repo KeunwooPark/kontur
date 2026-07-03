@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { validateSystem } from "../ir/index.js";
 import { transpile } from "../transpile/index.js";
 import { liftPython, liftTypeScript } from "./index.js";
-import type { System } from "../ir/schema.js";
+import type { Node, System } from "../ir/schema.js";
 
 function load(name: string): System {
   const path = fileURLToPath(new URL(`../../examples/${name}`, import.meta.url));
@@ -2564,5 +2564,170 @@ describe.skipIf(!hasPython())("lift: with statement & assert (item 15, Python)",
 
   it("refuses a non-name with-target (deferred)", () => {
     expect(() => liftPython("def f(d: dict) -> None:\n    with mgr() as d.x:\n        do(d)\n")).toThrow(/with-target/);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: nested (local) functions — closure conversion (Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("lifts a local function with NO captures as its own module, and it round-trips", () => {
+    const src = [
+      "def outer(n: int) -> int:",
+      "    def double(x: int) -> int:",
+      "        return (x * 2)",
+      "    result = double(n)",
+      "    return result",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    // The nested function is a first-class module keyed `${parent}$${name}` …
+    expect(sys.modules["outer$double"]).toBeDefined();
+    expect(sys.modules["outer$double"]!.nestedIn).toBe("outer");
+    // … reached by a `module` link from its parent (so the navigator can expand it).
+    const link = sys.modules["outer"]!.interior.nodes.find((n) => n.kind === "module");
+    expect(link && (link as { ref: string }).ref).toBe("outer$double");
+    // The re-nested def is emitted inside the parent body, not hoisted to the top.
+    expect(py).toContain("    def double(x: int) -> int:");
+    expect(py).toContain("    result = double(n)");
+  });
+
+  it("closure-converts a captured enclosing variable and reproduces the source", () => {
+    const src = [
+      "def merge_hooks(request_hooks: dict, session_hooks: dict) -> dict:",
+      '    default = session_hooks["response"]',
+      "",
+      "    def merge_setting(key: str) -> list:",
+      "        return [default, request_hooks[key]]",
+      '    result = merge_setting("response")',
+      "    return result",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    // The captured names become trailing in-ports, marked as captures on the module.
+    expect(sys.modules["merge_hooks$merge_setting"]!.captures).toEqual(["default", "request_hooks"]);
+    // Transpile STRIPS the captures from the signature and the call site, and the
+    // captured local's binding survives in the parent (re-emitted before the call).
+    expect(py).toContain("    def merge_setting(key: str) -> list:");
+    expect(py).toContain('    default = session_hooks["response"]');
+    expect(py).toContain('    result = merge_setting("response")');
+    expect(py).not.toContain("merge_setting(\"response\", default"); // captures not passed
+  });
+
+  it("refuses a local function used as a VALUE (an escaping closure)", () => {
+    const src = "def f() -> object:\n    def g() -> int:\n        return 1\n    return g\n";
+    expect(() => liftPython(src)).toThrow(/escaping its scope/);
+  });
+
+  it("refuses a local function that captures self", () => {
+    const src = [
+      "class C:",
+      "    def m(self) -> int:",
+      "        def inner() -> int:",
+      "            return self.x",
+      "        return inner()",
+      "",
+    ].join("\n");
+    expect(() => liftPython(src)).toThrow(/capturing self/);
+  });
+
+  it("refuses `nonlocal` mutation from a local function", () => {
+    const src = [
+      "def f() -> int:",
+      "    total = 0",
+      "    def add() -> None:",
+      "        nonlocal total",
+      "        total = (total + 1)",
+      "    add()",
+      "    return total",
+      "",
+    ].join("\n");
+    expect(() => liftPython(src)).toThrow(/nonlocal/);
+  });
+
+  it("refuses a function nested more than one level deep", () => {
+    const src = [
+      "def a() -> int:",
+      "    def b() -> int:",
+      "        def c() -> int:",
+      "            return 1",
+      "        return c()",
+      "    return b()",
+      "",
+    ].join("\n");
+    expect(() => liftPython(src)).toThrow(/nested more than one level/);
+  });
+
+  it("refuses a def nested inside a control block (only a top-level local def lifts)", () => {
+    const src = [
+      "def f(flag: bool) -> int:",
+      "    if flag:",
+      "        def g() -> int:",
+      "            return 1",
+      "        return g()",
+      "    return 0",
+      "",
+    ].join("\n");
+    expect(() => liftPython(src)).toThrow(/nested inside a control block/);
+  });
+});
+
+describe.skipIf(!hasPython())("lift: class instantiation → constructor link (surfaces-only view) (Python)", () => {
+  const rt = (src: string) => {
+    const sys = liftPython(src);
+    expect(validateSystem(sys).ok).toBe(true);
+    const a = transpile(sys, "python");
+    expect(transpile(liftPython(a), "python")).toBe(a); // Python fixed point
+    return { sys, py: a };
+  };
+
+  it("links `Box(n)` to the class module, deriving the contract from __init__, and round-trips", () => {
+    const src = [
+      "class Box:",
+      "    def __init__(self, size: int) -> None:",
+      "        self.size = size",
+      "",
+      "def build(n: int) -> Box:",
+      "    b = Box(n)",
+      "    return b",
+      "",
+    ].join("\n");
+    const { sys, py } = rt(src);
+    // The class module's ports ARE its constructor contract (`__init__` minus self).
+    expect(sys.modules["Box"]!.kind).toBe("class");
+    expect(sys.modules["Box"]!.ports.map((p) => p.name)).toEqual(["size"]);
+    // The instantiation is a `module` link to the class — so the navigator descends
+    // into Box from `build`, and the constructor call round-trips with PascalCase.
+    const link = sys.modules["build"]!.interior.nodes.find(
+      (n): n is Extract<Node, { kind: "module" }> => n.kind === "module" && n.ref === "Box",
+    );
+    expect(link).toBeDefined();
+    // The arg wires to the derived `size` port (not a phantom `arg0`).
+    expect(sys.modules["build"]!.interior.wires.some(([, to]) => to === `${link!.id}:size`)).toBe(true);
+    expect(py).toContain("    b = Box(n)");
+  });
+
+  it("wires constructor keyword args to the __init__ ports by name", () => {
+    const { sys } = rt(
+      [
+        "class Point:",
+        "    def __init__(self, x: int, y: int) -> None:",
+        "        self.x = x",
+        "        self.y = y",
+        "",
+        "def origin() -> Point:",
+        "    p = Point(x=0, y=1)",
+        "    return p",
+        "",
+      ].join("\n"),
+    );
+    const link = sys.modules["origin"]!.interior.nodes.find((n) => n.kind === "module")!;
+    const wired = sys.modules["origin"]!.interior.wires.filter(([, to]) => to.startsWith(`${link.id}:`)).map(([, to]) => to);
+    expect(wired).toEqual(expect.arrayContaining([`${link.id}:x`, `${link.id}:y`]));
   });
 });

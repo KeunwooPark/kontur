@@ -672,13 +672,16 @@ def _stmt(s):
         if s.msg is not None:
             out["message"] = expr(s.msg)
         return out
-    # A nested function/class is a closure capturing the enclosing scope; the IR has
-    # only flat, named modules with explicit boundaries — no closure-value node. Under
-    # the map goal we DROP it (a no-op in the enclosing flow): the enclosing function
-    # still lifts, and any later reference to the nested name resolves as a free
-    # identifier. Lossy (the nested body is elided) but keeps the file liftable.
-    if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return {"t": "pass"}
+    # A nested function DIRECTLY in a function body is lifted as its own module by
+    # `func()` (closure-converted) before the body reaches here. Anything still
+    # arriving here is a harder case: a def nested inside a control block (its
+    # visibility is flow-dependent) or a nested CLASS (no closure-converted form).
+    # Refuse it loudly rather than silently dropping the body — a lossy elision was
+    # the previous behaviour and violates the loud-reject discipline.
+    if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        raise SystemExit("lift(py): unsupported function nested inside a control block (only a top-level local def is lifted, deferred)")
+    if isinstance(s, ast.ClassDef):
+        raise SystemExit("lift(py): unsupported nested class (no closure-converted form, deferred)")
     # `global x` / `nonlocal x` declare cross-scope mutation the per-function
     # dataflow IR cannot represent. Drop the declaration (a no-op); the following
     # assignment lifts as an ordinary local rebind (drift: the enclosing/module
@@ -823,12 +826,168 @@ def decorators_of(node):
     return out
 
 
-def func(f, is_method=False):
+def param_names(f):
+    """Every parameter name of a def, across all kinds (posonly, normal, *args,
+    keyword-only, **kwargs) — the names bound by the signature."""
+    a = f.args
+    names = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
+    if a.vararg:
+        names.add(a.vararg.arg)
+    if a.kwarg:
+        names.add(a.kwarg.arg)
+    return names
+
+
+def scope_bound_names(body):
+    """Names BOUND directly within a statement list — assignment targets, for/with
+    targets, except bindings, imports, and nested def/class NAMES — WITHOUT
+    descending into nested function/class scopes (whose interiors are their own
+    scope). Used to know what a function's own locals are."""
+    bound = set()
+
+    def visit(n):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(n.name)
+            return  # a nested scope: its interior does not bind names here
+        if isinstance(n, ast.Lambda):
+            return
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+            bound.add(n.id)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            bound.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        for c in ast.iter_child_nodes(n):
+            visit(c)
+
+    for n in body:
+        visit(n)
+    return bound
+
+
+def free_vars(fn_node):
+    """The Load-context names a def reads but does not itself bind — its free
+    variables — not descending into further-nested scopes and ignoring names it
+    declares `global`. These resolve either to an enclosing local (a capture) or to
+    a module-scope name (a free identifier)."""
+    bound = param_names(fn_node) | scope_bound_names(fn_node.body)
+    for n in ast.walk(fn_node):
+        if isinstance(n, ast.Global):
+            bound.update(n.names)
+    free = set()
+
+    def visit(n):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return  # do not descend into a nested scope
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in bound:
+            free.add(n.id)
+        for c in ast.iter_child_nodes(n):
+            visit(c)
+
+    for s in fn_node.body:
+        visit(s)
+    return free
+
+
+def assert_not_escaping(f, names):
+    """Refuse if any nested-function name is used as a VALUE (not merely called) —
+    returned, stored, or passed as an argument. That is a true closure escaping its
+    scope, which the flat-module IR (named modules with explicit boundaries) cannot
+    represent; a call, by contrast, becomes an ordinary module link."""
+    escaping = set()
+
+    class V(ast.NodeVisitor):
+        def visit_Call(self, node):
+            for a in node.args:
+                self.visit(a)
+            for k in node.keywords:
+                self.visit(k)
+            # The callee position of a nested-name call is the ALLOWED use; anything
+            # else (a bare reference elsewhere) is an escape. Visit the callee only
+            # when it is not one of our names.
+            if not (isinstance(node.func, ast.Name) and node.func.id in names):
+                self.visit(node.func)
+
+        def visit_Name(self, node):
+            if isinstance(node.ctx, ast.Load) and node.id in names:
+                escaping.add(node.id)
+
+    V().visit(f)
+    if escaping:
+        raise SystemExit(
+            "lift(py): unsupported local function used as a value (a closure escaping its scope, deferred): "
+            + ", ".join(sorted(escaping))
+        )
+
+
+class _AppendCaptures(ast.NodeTransformer):
+    """Rewrite every call to a hoisted nested function so its captured enclosing
+    variables are passed as trailing positional args — closure conversion at the
+    call site, matching the capture params appended to the lifted function."""
+
+    def __init__(self, captures_by_name):
+        self.caps = captures_by_name
+
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id in self.caps:
+            for c in self.caps[node.func.id]:
+                node.args.append(ast.Name(id=c, ctx=ast.Load()))
+        return node
+
+
+def analyze_nested(nd, parent_locals, in_method):
+    """Classify a nested (local) function and return its capture list, or refuse
+    loudly. Captures are the free variables it reads from the enclosing function's
+    scope; those get promoted to trailing params (closure conversion). The
+    intractable cases — `nonlocal` mutation, capturing `self`, escaping as a value
+    (checked by the caller) — are refused rather than dropped."""
+    for n in ast.walk(nd):
+        if isinstance(n, ast.Nonlocal):
+            raise SystemExit("lift(py): unsupported nonlocal in a local function (mutates an enclosing binding, deferred)")
+    free = free_vars(nd)
+    if in_method and "self" in free:
+        raise SystemExit("lift(py): unsupported local function capturing self (deferred)")
+    # A free name that is an enclosing local is a CAPTURE; the rest (module globals,
+    # imports, builtins, sibling top-level defs) resolve as free identifiers as before.
+    return sorted(n for n in free if n in parent_locals)
+
+
+def func(f, is_method=False, is_nested=False):
     decorators = decorators_of(f)
     params = params_of(f, is_method)
     returns = [] if is_void(f.returns) else [{"name": "result", "type": map_type(f.returns)}]
     doc, body = docstring_of(f.body)
+
+    # Nested (local) function defs at the TOP level of this body → each lifted as its
+    # own module (navigable/expandable), with captured enclosing vars promoted to
+    # trailing params. A def nested inside a control block, or inside an already-
+    # nested function, is a distinct case refused loudly (never silently dropped).
+    nested_defs = [s for s in body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    nested_fns = []
+    if nested_defs:
+        if is_nested:
+            raise SystemExit("lift(py): unsupported function nested more than one level deep (deferred)")
+        parent_locals = param_names(f) | scope_bound_names(body)
+        captures_by_name = {nd.name: analyze_nested(nd, parent_locals, is_method) for nd in nested_defs}
+        assert_not_escaping(f, set(captures_by_name))
+        if any(captures_by_name.values()):
+            _AppendCaptures(captures_by_name).visit(f)
+            ast.fix_missing_locations(f)
+        for nd in nested_defs:
+            nf = func(nd, is_method=False, is_nested=True)
+            caps = captures_by_name[nd.name]
+            for c in caps:
+                nf["params"].append({"name": c, "type": "any"})
+            if caps:
+                nf["captures"] = caps
+            nested_fns.append(nf)
+        body = [s for s in body if s not in nested_defs]
+
     out = {"name": f.name, "params": params, "returns": returns, "body": stmts(body)}
+    if nested_fns:
+        out["nested"] = nested_fns
     if decorators:
         out["decorators"] = decorators
     if doc is not None:

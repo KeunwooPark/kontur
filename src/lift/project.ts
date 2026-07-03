@@ -23,7 +23,7 @@ import type { Program } from "../transpile/ast.js";
 import type { System } from "../ir/schema.js";
 import { parseTypeScript } from "./ast-from-ts.js";
 import { parsePython } from "./ast-from-python.js";
-import { liftProgram, type LiftContext, type LocalImportTarget } from "./to-ir.js";
+import { liftProgram, ctorParamNames, type LiftContext, type LocalImportTarget } from "./to-ir.js";
 import { validateSystem } from "../ir/validate.js";
 import { langOf, resolveLocalImport } from "./resolve.js";
 
@@ -160,6 +160,9 @@ function assemble(
     ]));
     const key = moduleKey(root, abs);
     for (const f of program.functions) moduleParams.set(`${key}#${f.name}`, f.params.map((p) => p.name));
+    // A class links as a constructor: register its `__init__`/`constructor` params
+    // under the class id so a cross-file instantiation wires its args by those ports.
+    for (const c of program.classes) moduleParams.set(`${key}#${c.name}`, ctorParamNames(c));
   }
 
   const modules: System["modules"] = {};
@@ -185,10 +188,13 @@ function assemble(
 
 /**
  * The navigation roots of a merged System: modules no other module links to.
- * Methods are linked from their class and free functions from their callers, so
- * "unreferenced" leaves exactly the top-level entry points (and any class, which
- * nothing links to). If everything is referenced (e.g. a pure import cycle),
- * fall back to all non-method modules so nothing is unreachable.
+ * Methods are linked from their class, free functions from their callers, and a
+ * class from wherever it is instantiated — so "unreferenced" leaves the true
+ * SURFACES: entry-point functions plus any class nothing constructs in-project
+ * (genuinely external-facing API). A class used internally gains an in-edge and
+ * drops out of the roots, reached by descending into the function that builds it.
+ * If everything is referenced (e.g. a pure import cycle), fall back to all
+ * non-method modules so nothing is unreachable.
  */
 function computeRoots(modules: System["modules"]): string[] {
   const referenced = new Set<string>();

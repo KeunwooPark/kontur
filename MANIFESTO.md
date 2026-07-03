@@ -157,8 +157,19 @@ Navigating into a method link opens that method's flow on its own canvas, like
 any other module. A method reaches the enclosing class's attributes through
 `stateGet` (a pure data source, `this.x`) and `stateSet` (an effect sequenced on
 the control wire, `this.x = …`) — keeping effects as control-wire-sequenced
-nodes per issue #4. A class module carries no boundary ports, so the
-port-boundary invariant applies only to its methods.
+nodes per issue #4.
+
+A class module's **boundary ports are its constructor contract**: the `__init__`
+/ `constructor` params (receiver dropped) as data in-ports. This is what lets an
+instantiation `Session(...)` be a `module` **link** to the class (its ports
+derived from this contract, like any other link) rather than an opaque stub — so
+a class used internally gains an in-edge and drops out of the navigation roots,
+leaving the top-level view showing only true *surfaces* (entry-point functions +
+genuinely external-facing classes). These constructor ports describe the boundary
+a caller sees; they are NOT wired to the class's interior (a namespace of state +
+methods), so they stay data-in — which the port-boundary invariant already
+exempts (an unconnected data in-port is faithful). The invariant's connected-to-
+interior requirement therefore still applies only to a class's methods.
 
 Note on module-node `ports`: in the navigator demo they are **restated by hand** and checked
 after the fact. That's a known wart — see Issue #5. They should be **derived** from

@@ -247,7 +247,11 @@ function pyParams(f: Fn): string {
   const parts: string[] = f.isMethod && !isStatic ? ["self"] : [];
   let starEmitted = false;
   let slashPending = false; // positional-only params seen, awaiting the `/` separator
+  // Captured closure variables are in-ports on the IR (explicit dataflow) but NOT
+  // real parameters — drop them so the re-nested def reads them as closure vars.
+  const captures = new Set(f.captures ?? []);
   for (const p of f.params) {
+    if (captures.has(p.name)) continue;
     if (p.positionalOnly) {
       slashPending = true;
       parts.push(pyParam(p));
@@ -278,6 +282,9 @@ function fn(f: Fn, indent = ""): string {
   // The docstring is the first body statement (PEP 257). A doc-only body is a
   // complete Python body, so it needs no `pass` filler.
   if (f.doc !== undefined) body.push(`${indent}    ${pyDocLiteral(f.doc)}`);
+  // Nested (local) functions come first — a `def` inside the body, before the
+  // statements that call it — so the closure variables they read are in scope.
+  for (const nf of f.nested ?? []) body.push(...fn(nf, indent + "    ").split("\n"), "");
   for (const s of f.body) body.push(...stmt(s, indent + "    "));
   if (body.length === 0) body.push(`${indent}    pass`);
   lines.push(...body);
