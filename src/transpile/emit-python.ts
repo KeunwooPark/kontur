@@ -7,6 +7,8 @@ const BIN: Partial<Record<Op, string>> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%",
   eq: "==", ne: "!=", lt: "<", le: "<=", gt: ">", ge: ">=",
   is: "is", isnot: "is not", in: "in", notin: "not in",
+  floordiv: "//", pow: "**",
+  bitand: "&", bitor: "|", bitxor: "^", shl: "<<", shr: ">>",
   and: "and", or: "or", concat: "+",
 };
 
@@ -49,7 +51,7 @@ function expr(e: Expr): string {
     case "array": return `[${e.elems.map(expr).join(", ")}]`;
     case "index": return `${expr(e.obj)}[${expr(e.key)}]`;
     // A slice keeps each present bound around the `:`; an absent bound is an open end.
-    case "slice": return `${expr(e.obj)}[${e.start ? expr(e.start) : ""}:${e.stop ? expr(e.stop) : ""}]`;
+    case "slice": return `${expr(e.obj)}[${e.start ? expr(e.start) : ""}:${e.stop ? expr(e.stop) : ""}${e.step ? ":" + expr(e.step) : ""}]`;
     case "collection": {
       if (e.form === "dict") {
         const entries = e.entries ?? [];
@@ -154,8 +156,9 @@ function stmt(s: Stmt, indent: string): string[] {
       // (`raise TypeError(...)`).
       return [`${indent}raise ${s.errorType ?? "Exception"}(${expr(s.arg)})`];
     case "rethrow":
-      // Re-raise an existing value unchanged: `raise e` (not wrapped).
-      return [`${indent}raise ${expr(s.value)}`];
+      // Re-raise an existing value unchanged: `raise e` (not wrapped), or a bare
+      // `raise` (re-raise the active exception) when there is no value.
+      return [`${indent}raise${s.value !== undefined ? " " + expr(s.value) : ""}`];
     case "return":
       return [`${indent}return${s.expr ? ` ${expr(s.expr)}` : ""}`];
     case "returnObject":
@@ -229,7 +232,8 @@ function pyParam(p: Param): string {
   const anno = p.type === "any" ? "" : `: ${pyType(p.type)}`;
   if (p.variadic === "args") return `*${snake(p.name)}${anno}`;
   if (p.variadic === "kwargs") return `**${snake(p.name)}${anno}`;
-  const dflt = p.default === undefined ? "" : anno ? ` = ${expr(p.default)}` : `=${expr(p.default)}`;
+  const dv = p.default === undefined ? "" : p.default.t === "raw" ? p.default.src : expr(p.default);
+  const dflt = p.default === undefined ? "" : anno ? ` = ${dv}` : `=${dv}`;
   return `${snake(p.name)}${anno}${dflt}`;
 }
 

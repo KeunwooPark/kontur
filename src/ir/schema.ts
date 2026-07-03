@@ -53,6 +53,13 @@ export const Op = z.enum([
   // membership → `.includes()`) and the TS lifter never produces them.
   "is", "isnot", "in", "notin",
   "and", "or", "not",
+  // Floor division (`//`) and exponentiation (`**`) — binary, on pins "a","b".
+  // Python round-trips both; TS has no `//` (emitted as `Math.floor(a/b)` one-way)
+  // but `**` is native.
+  "floordiv", "pow",
+  // Bitwise binary ops (pins "a","b"): `&`, `|`, `^`, `<<`, `>>`. Native in both
+  // Python and TS/JS.
+  "bitand", "bitor", "bitxor", "shl", "shr",
   // Arithmetic/bitwise unary ops (operand on pin "x"): `-x`, `+x`, `~x`.
   "neg", "pos", "bitnot",
   "concat",
@@ -69,6 +76,10 @@ export const Op = z.enum([
 export const ParamDefault = z.discriminatedUnion("t", [
   z.object({ t: z.literal("lit"), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }).strict(),
   z.object({ t: z.literal("var"), name: z.string().min(1) }).strict(),
+  // A verbatim default expression carried as source text, emitted as-is (no
+  // re-casing) — the escape hatch for a richer default (`...`, `1 + 1`,
+  // `field(default_factory=list)`) that is not a plain literal or name.
+  z.object({ t: z.literal("raw"), src: z.string().min(1) }).strict(),
 ]);
 
 /**

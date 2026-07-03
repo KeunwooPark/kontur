@@ -22,6 +22,7 @@ const BINARY_OPS = new Set<Op>([
   "add", "sub", "mul", "div", "mod",
   "eq", "ne", "lt", "le", "gt", "ge",
   "is", "isnot", "in", "notin",
+  "floordiv", "pow", "bitand", "bitor", "bitxor", "shl", "shr",
   "and", "or", "concat",
 ]);
 
@@ -323,7 +324,10 @@ class ModuleCompiler {
 
       if (node.kind === "rethrow") {
         // Terminal too; the value is re-raised unwrapped (`throw e` / `raise e`).
-        stmts.push({ t: "rethrow", value: this.resolveInput(node.id, "value") });
+        // A bare `raise` (no "value" wire) re-raises the active exception.
+        stmts.push(this.dataSrc.has(`${node.id}:value`)
+          ? { t: "rethrow", value: this.resolveInput(node.id, "value") }
+          : { t: "rethrow" });
         return { stmts };
       }
 
@@ -482,9 +486,9 @@ class ModuleCompiler {
       case "slice": {
         // Each bound is present only when its pin is wired (an absent bound is an
         // open slice end, `obj[:3]` / `obj[1:]`).
-        const bound = (pin: "start" | "stop") =>
+        const bound = (pin: "start" | "stop" | "step") =>
           this.dataSrc.has(`${node.id}:${pin}`) ? { [pin]: this.resolveInput(node.id, pin) } : {};
-        return { t: "slice", obj: this.resolveInput(node.id, "obj"), ...bound("start"), ...bound("stop") };
+        return { t: "slice", obj: this.resolveInput(node.id, "obj"), ...bound("start"), ...bound("stop"), ...bound("step") };
       }
       case "comprehension":
         return {
@@ -523,8 +527,12 @@ class ModuleCompiler {
 
   private moduleCall(node: Extract<Node, { kind: "module" }>): Expr {
     const target = this.system.modules[node.ref]!;
+    // Emit an argument for each in-data port that is actually wired. A port left
+    // unwired at the call site (an argument relying on the callee's default, or a
+    // partial link formed under the tolerant lift) is skipped rather than crashing
+    // the compile — keeping the reverse (transpile) robust.
     const args = target.ports
-      .filter((p) => p.io === "in" && p.wire === "data")
+      .filter((p) => p.io === "in" && p.wire === "data" && this.dataSrc.has(`${node.id}:${p.name}`))
       .map((p) => this.resolveInput(node.id, p.name));
     // Call by the call-site name (`call`) when set — an import alias or a
     // `ns.member` access — else the target's bare local name. `call` is the exact

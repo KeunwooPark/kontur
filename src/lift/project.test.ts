@@ -186,8 +186,9 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
 
   it("skips an unsupported file loudly and degrades a call into it to a stub (no dangling link)", () => {
     const root = writeProject({
-      // Out of subset: a loop-carried-out variable (read after the loop) → lift rejects it.
-      "bad.ts": "export function bad(items: number[]): number {\n  let last = 0;\n  for (const x of items) {\n    last = score(x);\n  }\n  return last;\n}\n",
+      // Out of subset: a value merged across try/except paths WITH a `finally` (no
+      // clean phi home) → lift rejects it (assertNoTryMerge).
+      "bad.ts": "export function bad(x: number): number {\n  let v = 0;\n  try {\n    v = parse(x);\n  } catch (e) {\n    v = 1;\n  } finally {\n    cleanup();\n  }\n  return v;\n}\n",
       "main.ts": [
         'import { bad } from "./bad";',
         "",
@@ -230,6 +231,32 @@ describe("liftDirectory: walk a tree, root the nav, report skips", () => {
     expect(skipped.find((s) => s.file === "dup.ts")!.phase).toBe("lift");
     expect(system.modules["dup#C"]).toBeUndefined();
     expect(validateSystem(system).ok).toBe(true); // the assembled System stays valid
+  });
+
+  it("degrades a constructor call to an imported CLASS into a stub (no broken class link)", () => {
+    // A class module has no callable param ports (they live on `__init__`), so a
+    // constructor call `Widget(x=1)` cannot wire args to a class link. Under the
+    // tolerant lift it becomes a stub `function` node — the System still validates.
+    const root = writeProject({
+      "widget.ts": "export class Widget {\n  render(): number {\n    return 1;\n  }\n}\n",
+      "main.ts": [
+        'import { Widget } from "./widget";',
+        "",
+        "export function make(n: number): Widget {",
+        "  const w = Widget(n);",
+        "  return w;",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const { system, skipped } = liftDirectory(root);
+    expect(skipped).toEqual([]);
+    expect(validateSystem(system).ok).toBe(true);
+    const nodes = system.modules["main#make"]!.interior.nodes;
+    const stub = nodes.find(
+      (n): n is Extract<Node, { kind: "function" }> => n.kind === "function" && n.label === "Widget",
+    );
+    expect(stub).toBeDefined();
   });
 
   it("does not walk into node_modules or pick up test/declaration files", () => {

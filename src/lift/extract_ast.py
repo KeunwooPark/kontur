@@ -8,7 +8,10 @@ import json
 import sys
 
 TYPE_MAP = {"int": "int", "float": "float", "str": "string", "bool": "bool"}
-BINOP = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div", ast.Mod: "mod"}
+BINOP = {ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "div", ast.Mod: "mod",
+         ast.FloorDiv: "floordiv", ast.Pow: "pow",
+         ast.BitAnd: "bitand", ast.BitOr: "bitor", ast.BitXor: "bitxor",
+         ast.LShift: "shl", ast.RShift: "shr"}
 CMP = {ast.Eq: "eq", ast.NotEq: "ne", ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge",
        ast.Is: "is", ast.IsNot: "isnot", ast.In: "in", ast.NotIn: "notin"}
 # Prefix unary operators sharing the `un` node: logical `not`, arithmetic `-`/`+`,
@@ -96,7 +99,12 @@ def attr_root(e):
 
 def expr(e):
     if isinstance(e, ast.Constant):
-        return {"t": "lit", "value": e.value}
+        # JSON-serializable scalar literals ride the `lit` node. A `bytes` (`b"..."`),
+        # `complex`, or bare `...` constant is not JSON-serializable as a value, so it
+        # is captured VERBATIM via the escape hatch (emitted as written).
+        if isinstance(e.value, (str, int, float, bool)) or e.value is None:
+            return {"t": "lit", "value": e.value}
+        return {"t": "global", "name": ast.unparse(e)}
     # A lambda is an anonymous function that captures its enclosing scope (a
     # closure). The IR models functions as named, flat modules with explicit
     # param/return boundaries — it has no anonymous-function node and no closure
@@ -135,13 +143,15 @@ def expr(e):
     # end). A step (`obj[::2]`) has no `.slice` form, so refuse it loudly (deferred).
     if isinstance(e, ast.Subscript) and isinstance(e.slice, ast.Slice):
         sl = e.slice
-        if sl.step is not None:
-            raise SystemExit("lift(py): unsupported slice step (`a[::2]`, deferred)")
         out = {"t": "slice", "obj": expr(e.value)}
         if sl.lower is not None:
             out["start"] = expr(sl.lower)
         if sl.upper is not None:
             out["stop"] = expr(sl.upper)
+        # A step (`a[::2]`) is Python-faithful; TS has no slice-step form (dropped
+        # one-way on cross-compile).
+        if sl.step is not None:
+            out["step"] = expr(sl.step)
         return out
     # A general subscript read `obj[key]` -> an `index` node: the indexed value on
     # "obj", the key on "key". Covers a variable key (`a[i]`), a non-string const
@@ -231,7 +241,13 @@ def expr(e):
     # the base `sys` lifts to a value reference (globalRef), and this is an attrGet on it.
     if isinstance(e, ast.Attribute):
         return {"t": "attr", "obj": expr(e.value), "name": e.attr}
-    raise SystemExit("lift(py): unsupported expr: " + ast.dump(e))
+    # Escape hatch (drift): an expression outside the modelled subset — a call of a
+    # computed callee (`f(x)(y)`), a starred value, an unusual literal — is captured
+    # VERBATIM as a free-identifier value (globalRef) via ast.unparse and re-emitted
+    # as-is. Opaque to the dataflow (no read edges / call links), but keeps the file
+    # liftable rather than refusing. Every modelled construct is handled above, so
+    # this only fires for the genuinely unmodelled tail.
+    return {"t": "global", "name": ast.unparse(e)}
 
 
 ITERCOMP_FORM = {
@@ -353,8 +369,9 @@ def hoist_walruses(cond):
 
     def walk(node, safe):
         if isinstance(node, ast.NamedExpr):
-            if not safe:
-                raise SystemExit("lift(py): unsupported walrus in a short-circuited position (`… and (x := e)`, deferred)")
+            # A walrus in a short-circuited position (`… and (x := e)`) is hoisted
+            # unconditionally (drift): the binding is evaluated before the branch, so
+            # a pure RHS is faithful and an effectful one runs slightly early.
             inner = walk(node.value, True)
             assigns.append({"t": "let", "name": node.target.id, "expr": expr(inner)})
             return ast.copy_location(ast.Name(id=node.target.id, ctx=ast.Load()), node)
@@ -561,45 +578,64 @@ def _stmt(s):
         # default, left implicit). A bare `raise`, a `from` cause, or a non-call /
         # non-name value is beyond the model, so it is refused, not approximated.
         exc = s.exc
+        # `raise Exc(msg)` with a single plain (non-starred) message argument and no
+        # keywords → the `throw` node (carries the error type + the message), the
+        # clean modelled shape used by both emitters.
         if (
             s.cause is None
             and isinstance(exc, ast.Call)
             and isinstance(exc.func, ast.Name)
             and len(exc.args) == 1
+            and not isinstance(exc.args[0], ast.Starred)
+            and not exc.keywords
         ):
             node = {"t": "throw", "arg": expr(exc.args[0])}
             if exc.func.id != "Exception":
                 node["errorType"] = exc.func.id
             return node
-        if s.cause is None and isinstance(exc, ast.Name):
-            return {"t": "rethrow", "value": {"t": "var", "name": exc.id}}
-        raise SystemExit("lift(py): unsupported raise (only `raise <Exception>(message)` or re-raising a value `raise e` is modelled)")
+        # Any other raised expression — a bare exception class (`raise UnicodeError`),
+        # a multi-arg / starred / keyword constructor (`raise InvalidURL(*e.args)`,
+        # `raise Err(a, request=self)`), or re-raising a value (`raise e`) — is lowered
+        # as a value and re-raised unwrapped via `rethrow` (emits `raise <expr>`). A
+        # `from cause` clause is dropped (drift). A bare `raise` re-raises the active
+        # exception; with no value node it becomes a rethrow of a placeholder name.
+        if exc is None:
+            return {"t": "rethrow"}
+        return {"t": "rethrow", "value": expr(exc)}
     if isinstance(s, ast.Try):
-        # A single handler is modelled, optionally TYPED: `except E:` / `except
-        # (A, B):` carry their type name(s) on `errorTypes`; a bare `except:` or
-        # `except Exception:` stays catch-all. `try/else` and `try/finally` are
-        # captured as extra blocks. Several SEPARATE except clauses (distinct types
-        # with distinct bodies) have no single-handler IR home — refused, deferred.
-        if len(s.handlers) != 1:
-            raise SystemExit("lift(py): unsupported try with multiple/zero except handlers (deferred)")
-        h = s.handlers[0]
-        out = {
-            "t": "try",
-            "body": stmts(s.body),
-            "handler": stmts(h.body),
-        }
-        # The caught type(s): a bare `except:` or `except Exception:` is catch-all
-        # (no errorTypes); a (possibly dotted) name, or a tuple of them, is a typed
-        # handler — captured verbatim like a class base / a throw's errorType.
-        if h.type is not None and not (isinstance(h.type, ast.Name) and h.type.id == "Exception"):
-            if dotted_name(h.type) is not None:
-                out["errorTypes"] = [dotted_name(h.type)]
+        # The IR `try` node models ONE handler. Several separate `except` clauses are
+        # MERGED into a single catch-all-ish handler (drift): the caught types are the
+        # union of all clauses' types, and the handler body is their concatenation
+        # (for the common case where each handler re-raises, the first — terminal —
+        # dominates, so the merge is faithful there). `try/else` and `try/finally` are
+        # captured as extra blocks. A bare `try/finally` (zero handlers) is modelled
+        # as a re-raising catch-all so the `finally` runs and the exception still
+        # propagates — the faithful shape.
+        error_types = []
+        catch_all = False
+        catch_param = None
+        handler_body = []
+        for h in s.handlers:
+            if h.type is None or (isinstance(h.type, ast.Name) and h.type.id == "Exception"):
+                catch_all = True
+            elif dotted_name(h.type) is not None:
+                error_types.append(dotted_name(h.type))
             elif isinstance(h.type, ast.Tuple) and all(dotted_name(e) is not None for e in h.type.elts):
-                out["errorTypes"] = [dotted_name(e) for e in h.type.elts]
+                error_types.extend(dotted_name(e) for e in h.type.elts)
             else:
                 raise SystemExit("lift(py): unsupported except type (only a name, dotted name, or tuple of them)")
-        if h.name:
-            out["catchParam"] = h.name
+            if h.name and catch_param is None:
+                catch_param = h.name
+            handler_body.extend(stmts(h.body))
+        if not s.handlers:
+            # Pure try/finally: a re-raising catch-all preserves propagation semantics.
+            catch_all = True
+            handler_body = [{"t": "rethrow"}]
+        out = {"t": "try", "body": stmts(s.body), "handler": handler_body}
+        if error_types and not catch_all:
+            out["errorTypes"] = error_types
+        if catch_param:
+            out["catchParam"] = catch_param
         if s.orelse:
             out["orelse"] = stmts(s.orelse)
         if s.finalbody:
@@ -637,18 +673,23 @@ def _stmt(s):
             out["message"] = expr(s.msg)
         return out
     # A nested function/class is a closure capturing the enclosing scope; the IR has
-    # only flat, named modules with explicit boundaries — no closure capture — so it
-    # is refused loudly (deferred), not silently flattened.
-    if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        raise SystemExit("lift(py): unsupported nested function (closure capture has no IR node, deferred)")
-    if isinstance(s, ast.ClassDef):
-        raise SystemExit("lift(py): unsupported nested class (deferred)")
-    # `global x` / `nonlocal x` declare that an assignment targets an ENCLOSING /
-    # module scope — cross-scope mutation the IR's per-function dataflow cannot
-    # represent (the value would silently rebind a local). Refuse, do not lie.
+    # only flat, named modules with explicit boundaries — no closure-value node. Under
+    # the map goal we DROP it (a no-op in the enclosing flow): the enclosing function
+    # still lifts, and any later reference to the nested name resolves as a free
+    # identifier. Lossy (the nested body is elided) but keeps the file liftable.
+    if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {"t": "pass"}
+    # `global x` / `nonlocal x` declare cross-scope mutation the per-function
+    # dataflow IR cannot represent. Drop the declaration (a no-op); the following
+    # assignment lifts as an ordinary local rebind (drift: the enclosing/module
+    # binding is not updated).
     if isinstance(s, (ast.Global, ast.Nonlocal)):
-        kind = "global" if isinstance(s, ast.Global) else "nonlocal"
-        raise SystemExit("lift(py): unsupported " + kind + " declaration (cross-scope mutation has no IR node, deferred)")
+        return {"t": "pass"}
+    # A function-local / lazy import (`import idna`, `from netrc import netrc`) inside
+    # a body. Drop it (a no-op statement); the imported names resolve later as free
+    # identifiers, emitted verbatim (drift: the local-scope import is not reproduced).
+    if isinstance(s, (ast.Import, ast.ImportFrom)):
+        return {"t": "pass"}
     if isinstance(s, ast.Delete):
         # `del obj[key]` / `del obj.attr` are control-sequenced effects. A bare-name
         # delete (`del x`) removes a binding — a scope op with no IR node. Multiple
@@ -664,6 +705,15 @@ def _stmt(s):
         if isinstance(t, ast.Attribute):
             return {"t": "delAttr", "obj": expr(t.value), "attr": t.attr}
         raise SystemExit("lift(py): unsupported `del` of a bare name (removes a binding — a scope op with no IR node, deferred)")
+    # A bare non-call expression used as a statement — an attribute/name/subscript
+    # read for its side effect (`resp.content` triggers lazy loading), or a bare
+    # `await`. A call/method statement was handled above (routes to expr()). Model
+    # any remaining pure read as a no-op (drift: the read is elided from the map);
+    # a bare `await` keeps its awaited call sequenced.
+    if isinstance(s, ast.Expr):
+        if isinstance(s.value, ast.Await) and isinstance(s.value.value, ast.Call):
+            return {"t": "expr", "expr": expr(s.value.value)}
+        return {"t": "pass"}
     raise SystemExit("lift(py): unsupported stmt: " + ast.dump(s))
 
 
@@ -698,14 +748,17 @@ def default_expr(node):
     exclusively. A richer default expression refuses loudly rather than lifting to
     a lie (deferred to a later roadmap item)."""
     if isinstance(node, ast.Constant):
-        # An `...` (Ellipsis) default is a type-stub placeholder (`x: int = ...`), not
-        # a JSON-serializable literal — refuse cleanly rather than crash the extractor.
-        if node.value is Ellipsis:
-            raise SystemExit("lift(py): unsupported `...` (Ellipsis) default value (type-stub placeholder, deferred)")
-        return {"t": "lit", "value": node.value}
+        # An `...` (Ellipsis) default is a type-stub placeholder (`x: int = ...`),
+        # not a JSON literal. Carry it verbatim so the signature emits `= ...`.
+        if isinstance(node.value, (str, int, float, bool)) or node.value is None:
+            return {"t": "lit", "value": node.value}
+        return {"t": "raw", "src": ast.unparse(node)}
     if isinstance(node, ast.Name):
         return {"t": "var", "name": node.id}
-    raise SystemExit("lift(py): unsupported default value (only a literal or a bare name is modelled yet)")
+    # A richer default expression (a call, an attribute, an operator, a collection)
+    # is captured VERBATIM as source text (emitted as-is, no re-casing) — drift: the
+    # default round-trips but is opaque to the dataflow.
+    return {"t": "raw", "src": ast.unparse(node)}
 
 
 def params_of(f, is_method):
