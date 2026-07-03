@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { validateSystem } from "../ir/index.js";
 import type { System } from "../ir/schema.js";
 import { liftTypeScript } from "../lift/index.js";
-import { layoutModule, layoutSystem, render, renderCanvasSvg } from "./index.js";
+import { layoutModule, layoutSystem, render, renderCanvasSvg, renderNavigator } from "./index.js";
+import { ink } from "./theme.js";
 import { derivePins } from "./ports.js";
 
 function load(name: string): System {
@@ -161,6 +162,41 @@ describe("html bundle", () => {
   it("is deterministic", async () => {
     const sys = load("fizzbuzz.kontur.json");
     const [a, b] = await Promise.all([render(sys), render(sys)]);
+    expect(a).toBe(b);
+  });
+});
+
+describe("roots-first navigator (renderNavigator)", () => {
+  it("roots the nav on the link graph, not files, and embeds every canvas", async () => {
+    const sys = load("auth-search.kontur.json"); // login & search both link to userLookup
+    const html = await renderNavigator(sys);
+    // a self-contained navigator shell
+    expect(html).toContain("system roots");
+    expect(html).toContain("Click a ▸ box in the canvas");
+    // ROOTS are modules nothing links into: login/search are roots, userLookup is NOT
+    const roots = JSON.parse(html.match(/ROOTS=(\[[^\]]*\])/)![1]!);
+    expect(roots).toContain("login");
+    expect(roots).toContain("search");
+    expect(roots).not.toContain("userLookup"); // it has incoming links
+    // every module's canvas is embedded, keyed by id, with the link boxes live
+    for (const id of Object.keys(sys.modules)) expect(html).toContain(JSON.stringify(id));
+    expect(html).toContain("data-link"); // canvas link boxes navigable client-side
+    // fully offline, no NaN geometry
+    expect(html).not.toMatch(/<(script|link|img)[^>]*\s(src|href)="https?:/i);
+    expect(html).not.toContain("NaN");
+  });
+
+  it("themes the shell from the passed theme (paper vs ink)", async () => {
+    const sys = load("fizzbuzz.kontur.json");
+    const [paperHtml, inkHtml] = await Promise.all([renderNavigator(sys), renderNavigator(sys, ink)]);
+    expect(paperHtml).toContain(`--bg:#ffffff`);
+    expect(inkHtml).toContain(`--bg:${ink.bg}`);
+    expect(inkHtml).not.toContain(`--bg:#ffffff`);
+  });
+
+  it("is deterministic", async () => {
+    const sys = load("auth-search.kontur.json");
+    const [a, b] = await Promise.all([renderNavigator(sys), renderNavigator(sys)]);
     expect(a).toBe(b);
   });
 });

@@ -12,6 +12,7 @@ import { renderHtml, type Canvas } from "./html.js";
 import { defaultTheme, type Theme } from "./theme.js";
 
 export { layoutModule, renderCanvasSvg, renderHtml };
+export { renderNavigator } from "./navigator.js";
 export { themes, defaultTheme, paper, ink } from "./theme.js";
 export type { Theme } from "./theme.js";
 export type { CanvasLayout, LaidOutNode, LaidOutPort, LaidOutEdge, NodeKind } from "./layout.js";
