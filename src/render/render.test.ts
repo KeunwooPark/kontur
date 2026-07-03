@@ -85,6 +85,29 @@ describe("layout", () => {
     const link = login.nodes.find((n) => n.kind === "module");
     expect(link?.ref).toBe("userLookup");
   });
+
+  it("carries a resolved method call's ref through layout and marks it a link in SVG", async () => {
+    const src = [
+      "class Session {",
+      "  get(u: string): number {",
+      "    return this.request(u);",
+      "  }",
+      "  request(u: string): number {",
+      "    return u.length;",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const res = validateSystem(liftTypeScript(src));
+    if (!res.ok) throw new Error("lifted IR invalid");
+    const canvas = await layoutModule("Session.get", res.system);
+    const call = canvas.nodes.find((n) => n.kind === "method");
+    // The self-method call resolves to Session.request, and layout keeps the ref…
+    expect(call?.ref).toBe("Session.request");
+    // …so the SVG draws it as a navigable link (data-link + node-link class).
+    const svg = renderCanvasSvg(canvas, ink);
+    expect(svg).toContain('data-link="Session.request"');
+  });
 });
 
 describe("external (package) calls are rendered as boundary crossings", () => {
