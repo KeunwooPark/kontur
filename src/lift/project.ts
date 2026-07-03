@@ -152,6 +152,7 @@ function assemble(
   // from the liftable set only, so links never point at a skipped file.
   const declsByFile = new Map<string, Set<string>>();
   const moduleParams = new Map<string, string[]>();
+  const classIds = new Set<string>();
   for (const abs of liftable) {
     const program = programs.get(abs)!;
     declsByFile.set(abs, new Set<string>([
@@ -162,7 +163,13 @@ function assemble(
     for (const f of program.functions) moduleParams.set(`${key}#${f.name}`, f.params.map((p) => p.name));
     // A class links as a constructor: register its `__init__`/`constructor` params
     // under the class id so a cross-file instantiation wires its args by those ports.
-    for (const c of program.classes) moduleParams.set(`${key}#${c.name}`, ctorParamNames(c));
+    // Its methods are registered too, so a cross-file `local.method()` (typed by a
+    // constructor) resolves to a link; the class id is recorded for that typing.
+    for (const c of program.classes) {
+      moduleParams.set(`${key}#${c.name}`, ctorParamNames(c));
+      for (const m of c.methods) moduleParams.set(`${key}#${c.name}.${m.name}`, m.params.map((p) => p.name));
+      classIds.add(`${key}#${c.name}`);
+    }
   }
 
   const modules: System["modules"] = {};
@@ -177,6 +184,7 @@ function assemble(
       localImports,
       externalImports,
       moduleParams,
+      classIds,
     };
     const partial = liftProgram(program, ctx);
     Object.assign(modules, partial.modules);

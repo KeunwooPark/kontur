@@ -307,7 +307,13 @@ export const Node = z.discriminatedUnion("kind", [
   // ambient `self`/`this` — a method calling a sibling on its own object — so a
   // self-call carries no receiver edge, mirroring how `self` is implicit in a
   // method's interior. `label` is the method name, emitted verbatim.
-  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
+  // A method call `recv.name(args)`. `ref`, when set, is the module id of the
+  // method this resolves to (`${classId}.${name}`) — NAVIGATION metadata only: the
+  // renderer makes the node a hyperlink to that method's canvas, while the
+  // transpiler still emits `recv.name(args)` from the receiver + label (it ignores
+  // `ref`). Set only when the receiver's class is known (a `self` call, or a local
+  // assigned from a constructor); absent ⇒ an unresolved receiver (a leaf call).
+  z.object({ ...nodeBase, kind: z.literal("method"), label: z.string(), ref: z.string().min(1).optional(), kwNames: z.array(z.string().min(1).nullable()).optional(), starCount: z.number().int().nonnegative().optional() }).strict(),
   // Write an attribute of the enclosing class: a control-sequenced effect
   // (`this.attr = …`), with one data in-pin "value". Effects-as-control-nodes.
   z.object({ ...nodeBase, kind: z.literal("stateSet"), label: z.string(), attr: z.string().min(1) }).strict(),
